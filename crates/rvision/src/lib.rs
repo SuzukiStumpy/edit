@@ -25,4 +25,5 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod color;
 pub mod geometry;
