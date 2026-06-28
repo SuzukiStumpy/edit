@@ -1,0 +1,15 @@
+[package]
+name = "edit"
+version = "0.0.0"
+description = "A text-mode editor in the spirit of MS-DOS EDIT, built on rvision."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "edit"
+path = "src/main.rs"
+
+[dependencies]
+rvision = { path = "../rvision" }

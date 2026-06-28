@@ -1,0 +1,18 @@
+[package]
+name = "rvision"
+version = "0.0.0"
+description = "A TurboVision-style terminal UI framework, hand-built in Rust."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Runtime crates are budgeted in the workspace root and activated per phase:
+#   unicode-width.workspace = true         # Phase 1 — cell display width
+#   unicode-segmentation.workspace = true  # Phase 1 — grapheme navigation
+#   crossterm.workspace = true             # Phase 2 — CrosstermBackend
+# Adding anything beyond these requires a new ADR (see docs/adr/0001).
+
+[dev-dependencies]
+# insta.workspace = true                   # Phase 1 — snapshot render tests (ADR 0013)

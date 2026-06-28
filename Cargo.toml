@@ -1,0 +1,35 @@
+# Workspace root for the `edit` project.
+#
+# Two member crates:
+#   * rvision — the TurboVision-style terminal UI framework (library)
+#   * edit    — the text-mode editor binary, built on rvision
+#
+# See docs/roadmap.md for the phased plan and docs/adr/ for the decisions
+# behind this layout (ADR 0012).
+
+[workspace]
+resolver = "3"
+members = ["crates/rvision", "crates/edit"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"        # MSRV — see rust-toolchain.toml and ADR 0012
+license = "MIT OR Apache-2.0"
+authors = ["medwards"]
+repository = ""
+
+# Dependencies are declared once here and inherited by member crates via
+# `<crate>.workspace = true`, so the crate budget (ADR 0001/0006/0013) lives
+# in exactly one place.
+[workspace.dependencies]
+# Runtime — OS/terminal boundary and Unicode data tables only (ADR 0001, 0006).
+crossterm = "0.28"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+# Dev-only — snapshot testing (ADR 0013).
+insta = "1"
+
+# Optimised profile keeps the released editor snappy; nothing exotic.
+[profile.release]
+opt-level = 3
+lto = "thin"

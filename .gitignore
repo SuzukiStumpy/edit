@@ -1,0 +1,11 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# Insta snapshot review leftovers (committed snapshots are *.snap, not these)
+**/*.snap.new
+
+# Editor/OS noise
+*.swp
+.DS_Store

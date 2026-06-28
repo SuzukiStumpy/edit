@@ -1,0 +1,7 @@
+# Pins the toolchain so everyone builds on the project's MSRV (ADR 0012).
+# Building on the MSRV itself is what keeps the MSRV honest: if a newer
+# language/std feature sneaks in, the build breaks here rather than in a
+# downstream user's older toolchain.
+[toolchain]
+channel = "1.85.0"          # first stable with the Rust 2024 edition
+components = ["rustfmt", "clippy"]
