@@ -9,3 +9,7 @@
 # Editor/OS noise
 *.swp
 .DS_Store
+
+# Local VS Code settings: machine-specific absolute paths (rust-analyzer
+# linkedProjects pinned to the canonical /var/home root — see .vscode/settings.json)
+/.vscode/

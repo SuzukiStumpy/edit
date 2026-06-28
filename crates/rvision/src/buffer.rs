@@ -3,11 +3,10 @@
 //! Draw primitives clip silently to the buffer bounds (ADR 0002). A backend later
 //! diffs two buffers and flushes only the cells that changed.
 
-use crate::cell::{Cell, Grapheme};
+use crate::cell::Cell;
 use crate::color::Style;
 use crate::geometry::{Point, Rect, Size};
 use core::fmt::Write as _;
-use unicode_segmentation::UnicodeSegmentation;
 
 /// A grid of [`Cell`]s, stored row-major.
 #[derive(Debug, Clone)]
@@ -96,11 +95,10 @@ impl Buffer {
         if at.y < 0 || at.y >= self.size.height {
             return x;
         }
-        for cluster in s.graphemes(true) {
+        for cell in crate::cell::cells_of(s, style) {
             if x >= self.size.width {
                 break;
             }
-            let cell = Cell::new(Grapheme::new(cluster), style);
             let width = cell.width() as i16;
             // Never split a wide grapheme across the right edge.
             if width == 2 && x + 1 >= self.size.width {

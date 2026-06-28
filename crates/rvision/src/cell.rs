@@ -5,6 +5,7 @@
 
 use crate::color::Style;
 use core::fmt;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -110,6 +111,18 @@ impl Default for Cell {
     fn default() -> Self {
         Self::blank(Style::new())
     }
+}
+
+/// Iterates the grapheme clusters of `s` left-to-right as styled cells, one per
+/// cluster, each carrying its own display width.
+///
+/// The width-aware string drawing in [`crate::buffer::Buffer`] and
+/// [`crate::canvas::Canvas`] both build on this, so the grapheme-segmentation and
+/// width logic lives in exactly one place (ADR 0015). Callers do their own
+/// horizontal advance and clipping using each cell's [`Cell::width`].
+pub(crate) fn cells_of(s: &str, style: Style) -> impl Iterator<Item = Cell> + '_ {
+    s.graphemes(true)
+        .map(move |cluster| Cell::new(Grapheme::new(cluster), style))
 }
 
 #[cfg(test)]

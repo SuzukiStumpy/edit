@@ -21,7 +21,9 @@
 //!   swappable theme over a truecolour-ready colour type (ADR 0005).
 //!
 //! Modules are introduced phase by phase; [`geometry`] is the Phase 1 seed,
-//! [`event`] + [`app`] + [`crossterm_backend`] are the Phase 2 event loop.
+//! [`event`] + [`app`] + [`crossterm_backend`] are the Phase 2 event loop, and
+//! [`canvas`] + [`view`] + [`command`] are the Phase 3 view system (the retained
+//! tree, its draw surface, and the command vocabulary).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -29,9 +31,12 @@
 pub mod app;
 pub mod backend;
 pub mod buffer;
+pub mod canvas;
 pub mod cell;
 pub mod color;
+pub mod command;
 pub mod crossterm_backend;
 pub mod event;
 pub mod geometry;
 pub mod theme;
+pub mod view;

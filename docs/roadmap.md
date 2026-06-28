@@ -60,7 +60,7 @@ correctly. No real terminal yet.
 
 ---
 
-## Phase 2 — Real terminal & event loop ⏳ (code complete; awaiting manual verify)
+## Phase 2 — Real terminal & event loop ✅
 
 - `event`: `Event { Key, Mouse, Command, Broadcast, Resize, Idle }`,
   `EventResult { Consumed, Ignored }` (ADR 0004). ✅
@@ -85,22 +85,48 @@ correctly. No real terminal yet.
 - The pure `map_event` (crossterm → our `Event`) is the unit-tested core; live
   terminal I/O is checked by the demo.
 
-**Exit (first manual verify on Linux — to do by hand, no TTY in this env):**
-`cargo run -p rvision --example hello` shows a drawn screen, resizes cleanly, and
-always restores the terminal — even on panic (uncomment the `panic!` in the demo).
+**Exit (met):** manually verified on Linux — `cargo run -p rvision --example hello`
+draws a screen, resizes cleanly, and always restores the terminal, even on panic
+(the `panic!` path in the demo). The headless loop is covered by unit tests against
+the scripted backend.
 
 ---
 
-## Phase 3 — View system
+## Phase 3 — View system ✅
 
-- `view::View` trait: `bounds`, `draw`, `handle_event`, focus state/options.
-- `view::Group`: owns children, z-order, focus chain, three-phase dispatch
-  (positional → focused → broadcast), redraw orchestration (ADR 0003, 0004).
-- `command`: `Command` ids, enable/disable sets, bubbling up the owner chain.
-- Basic views: `StaticText` and a minimal focusable test view.
+- `canvas::Canvas`: translating, clipping draw surface over a `Buffer` — the draw
+  half of the view seam (ADR 0015). Views draw in local coords; `child()` carves a
+  sub-surface per child. ✅
+- `view::View` trait: `bounds`, `draw`, `handle_event`, `focusable`. ✅
+- `view::Group`: owns children (`Vec<Box<dyn View>>`), z-order draw, focus chain,
+  three-phase dispatch (positional → focused → broadcast) (ADR 0003, 0004). ✅
+- `view::Context`: a handler's outbound channel — posts commands (enabled-gated)
+  and broadcasts without view-to-view references. ✅
+- `command`: `Command` ids, `CommandSet` enable/disable, the `CM_USER`
+  framework/app boundary; bubbling is the recursive dispatch unwinding. ✅
+- Basic views: `StaticText` and a minimal focusable test view (`Probe`, in tests). ✅
+- `app::Root`: bridges the view tree to the Phase 2 `Program` loop — dispatches an
+  event, drains posted commands/broadcasts and re-dispatches them, quits on
+  `CM_QUIT`. Replaces Phase 2's quit-flag stepping stone. ✅
 
-**Tests first:** positional hit-testing; focus traversal (Tab/Shift-Tab);
-command bubbling and enable/disable; z-ordered draw.
+**Decisions made while building (see `docs/specs/`, ADR 0015):**
+- **Coordinates are owner-relative**, drawn through a translating/clipping
+  `Canvas` (ADR 0015), not absolute screen coords — keeps Phase 8/9 (MDI, window
+  drag) from becoming a coordinate rewrite. The grapheme→cell iteration is shared
+  with `Buffer::put_str` via one `cell::cells_of` helper.
+- **Commands bubble for free**: routing a focused event down the focus chain and
+  letting the result unwind *is* the up-the-owner-chain bubble — no back-refs, no
+  IDs needed yet.
+- **The command id space is open and partitioned**: framework standard ids live
+  below `CM_USER`, apps number from there up; `Event` stays a closed enum, so app
+  extensibility is *adding command ids*, never new event variants.
+- **Deferred (noted in `docs/specs/view.md`):** focus-aware drawing (Phase 5),
+  integer view IDs, cross-group Tab hand-off, and `Theme`-threaded draw (chrome).
+
+**Tests first (done):** positional hit-testing + point translation; focus
+traversal (Tab/Shift-Tab, skipping non-focusable); command posting, enable/disable
+gating, and down-then-up routing; z-ordered draw (snapshot); the `Root` loop bridge
+end-to-end through the scripted backend.
 
 ---
 
