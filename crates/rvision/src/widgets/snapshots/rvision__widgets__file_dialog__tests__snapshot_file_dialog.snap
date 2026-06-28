@@ -1,0 +1,22 @@
+---
+source: crates/rvision/src/widgets/file_dialog.rs
+expression: buf.to_text()
+---
+┌─────────────────── Open ───────────────────┐
+│Name:                                       │
+│                                            │
+│                                            │
+│Files:                                      │
+│..                                          │
+│sub/                                        │
+│a.txt                                       │
+│b.txt                                       │
+│                                            │
+│                                            │
+│                                            │
+│                                            │
+│                                            │
+│                                            │
+│                                            │
+│                       Open       Cancel    │
+└────────────────────────────────────────────┘

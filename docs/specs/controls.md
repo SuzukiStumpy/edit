@@ -1,6 +1,6 @@
 # Module spec: `rvision::widgets` controls (Phase 5)
 
-- **Status:** In progress
+- **Status:** Done
 - **Phase:** 5 (Dialogs & controls)
 - **Related ADRs:** 0003 (commands up / broadcasts down), 0004 (three-phase dispatch), 0005 (colour roles), 0015 (owner-relative coords + `Canvas`), 0017 (modal dialogs + focus-aware drawing)
 

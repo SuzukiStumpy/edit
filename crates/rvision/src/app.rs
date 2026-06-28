@@ -16,8 +16,8 @@ use crate::canvas::Canvas;
 use crate::command::{CM_QUIT, Command, CommandSet};
 use crate::event::{Event, EventResult, MouseEvent};
 use crate::geometry::{Point, Rect, Size};
-use crate::view::{Context, View};
-use crate::widgets::{Desktop, Dialog, MenuBar, StatusLine};
+use crate::view::{Context, Modal, View};
+use crate::widgets::{Desktop, MenuBar, StatusLine};
 use std::collections::VecDeque;
 use std::io;
 use std::time::Duration;
@@ -124,7 +124,7 @@ impl<T: Backend + EventSource> Application<T> {
     /// **draw** (it receives no events while the dialog is up), centre the dialog
     /// and draw it on top, present, then poll one event and hand it to the dialog.
     /// A positional event is translated into the dialog's local coordinates. The
-    /// first *ending* command the dialog posts ([`Dialog::ends_on`]) returns from
+    /// first *ending* command the dialog posts ([`Modal::ends_on`]) returns from
     /// the loop; any other posted command/broadcast is re-dispatched into the
     /// dialog, exactly as [`Root`] drains the tree. `Esc` closes it as `CM_CANCEL`.
     ///
@@ -137,7 +137,7 @@ impl<T: Backend + EventSource> Application<T> {
     pub fn exec_view(
         &mut self,
         background: &mut dyn Program,
-        dialog: &mut Dialog,
+        dialog: &mut dyn Modal,
     ) -> io::Result<Command> {
         let commands = CommandSet::new();
         loop {
@@ -187,7 +187,7 @@ fn centered(size: Size, within: Size) -> Rect {
 /// command (`Dialog::ends_on`) is returned to stop the modal loop; any other
 /// posted command/broadcast is re-dispatched into the dialog. Returns `None` if
 /// nothing ended the loop.
-fn dispatch_modal(dialog: &mut Dialog, event: &Event, commands: &CommandSet) -> Option<Command> {
+fn dispatch_modal(dialog: &mut dyn Modal, event: &Event, commands: &CommandSet) -> Option<Command> {
     let mut queue = VecDeque::new();
     {
         let mut ctx = Context::new(commands);

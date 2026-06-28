@@ -28,6 +28,13 @@ pub trait View {
         EventResult::Ignored                  // leaves that ignore everything
     }
     fn focusable(&self) -> bool { false }     // can this view hold focus?
+    fn set_focused(&mut self, focused: bool) {}  // owner pushes focus (ADR 0017)
+}
+
+// A view runnable modally by app::exec_view (ADR 0017): adds size + ending commands.
+pub trait Modal: View {
+    fn size(&self) -> Size;
+    fn ends_on(&self, command: Command) -> bool;
 }
 
 pub struct Context<'a> { /* posted queue + &CommandSet */ }
@@ -99,9 +106,11 @@ impl Group {
 
 ## Open questions
 
-- **Focus-aware drawing** (a focused button looking different): deferred to Phase
-  5; `draw` is `&self` and gets no focus flag yet — add a draw context or a stored
-  flag when a widget first needs it (YAGNI now).
+- **Focus-aware drawing** (a focused button looking different): *resolved in Phase
+  5* (ADR 0017). `draw` keeps its `&self`/`Canvas` signature; focus is a stored
+  flag pushed by the owner via the new defaulted `View::set_focused`, which `Group`
+  calls as focus moves (and forwards to its focused child). A richer draw context
+  (theme/cursor too) is still open if a future need appears.
 - **Integer view IDs** (ADR 0003) for targeted messages: not needed for bubbling
   or Tab traversal; add when a command must address a specific view.
 - **Cross-group Tab boundary**: focus currently wraps within a group; handing off

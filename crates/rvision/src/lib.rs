@@ -23,9 +23,13 @@
 //! Modules are introduced phase by phase; [`geometry`] is the Phase 1 seed,
 //! [`event`] + [`app`] + [`crossterm_backend`] are the Phase 2 event loop,
 //! [`canvas`] + [`view`] + [`command`] are the Phase 3 view system (the retained
-//! tree, its draw surface, and the command vocabulary), and [`widgets`] +
+//! tree, its draw surface, and the command vocabulary), [`widgets`] +
 //! [`app::Shell`] are the Phase 4 application chrome (desktop, windows, menu bar,
-//! status line, and the `TProgram`-style root that arranges them).
+//! status line, and the `TProgram`-style root that arranges them), and Phase 5
+//! adds modal dialogs and controls: [`widgets::Dialog`]/[`widgets::MessageBox`]/
+//! [`widgets::FileDialog`] run via [`app::Application::exec_view`], holding
+//! [`widgets::Button`], [`widgets::InputLine`], [`widgets::CheckBox`],
+//! [`widgets::RadioButtons`], and [`widgets::ListBox`] (ADR 0017).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

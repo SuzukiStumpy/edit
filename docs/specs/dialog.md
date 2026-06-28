@@ -1,6 +1,6 @@
 # Module spec: `rvision::widgets::Dialog` + `app::exec_view` + `MessageBox`
 
-- **Status:** In progress
+- **Status:** Done (the file picker landed too; `exec_view` runs any `view::Modal`)
 - **Phase:** 5 (Dialogs & controls)
 - **Related ADRs:** 0017 (modal loop + focus-aware drawing), 0003/0004 (tree + dispatch), 0015 (`Canvas`), 0005 (roles), 0016 (`Shell`/`Application` it runs beside)
 

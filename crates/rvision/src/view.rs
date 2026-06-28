@@ -16,7 +16,7 @@ use crate::canvas::Canvas;
 use crate::color::Style;
 use crate::command::{Command, CommandSet};
 use crate::event::{Event, EventResult, KeyCode, MouseEvent};
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Point, Rect, Size};
 
 /// One node of the UI tree.
 ///
@@ -55,6 +55,23 @@ pub trait View {
     fn set_focused(&mut self, focused: bool) {
         let _ = focused;
     }
+}
+
+/// A [`View`] that can be run modally by
+/// [`Application::exec_view`](crate::app::Application::exec_view) (ADR 0017).
+///
+/// It adds the two things the modal loop needs beyond a plain view: the size to
+/// centre the box at, and which commands end the loop (so the loop returns the
+/// command that closed the modal). Both [`Dialog`](crate::widgets::Dialog) and the
+/// file picker implement it.
+pub trait Modal: View {
+    /// The size [`exec_view`](crate::app::Application::exec_view) centres the modal
+    /// at.
+    fn size(&self) -> Size;
+
+    /// Whether a posted `command` should close the modal loop (TurboVision's
+    /// `endModal`). The loop returns the first such command.
+    fn ends_on(&self, command: Command) -> bool;
 }
 
 /// A handler's outbound channel: how a view posts commands and queries command

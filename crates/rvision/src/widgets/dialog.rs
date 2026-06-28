@@ -18,7 +18,7 @@ use crate::command::{CM_CANCEL, CM_OK, Command};
 use crate::event::{Event, EventResult, KeyCode, MouseEvent};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::{Role, Theme};
-use crate::view::{Context, Group, View};
+use crate::view::{Context, Group, Modal, View};
 
 /// A modal box of controls with a title and a border.
 pub struct Dialog {
@@ -152,6 +152,16 @@ impl View for Dialog {
 
     fn focusable(&self) -> bool {
         true
+    }
+}
+
+impl Modal for Dialog {
+    fn size(&self) -> Size {
+        self.size
+    }
+
+    fn ends_on(&self, command: Command) -> bool {
+        self.ending.contains(&command)
     }
 }
 

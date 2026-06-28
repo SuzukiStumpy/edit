@@ -72,10 +72,11 @@ impl View for Shell { /* draws all four, routes events (below) */ }
 
 ## Open questions
 
-- **Disabled-item / focus-aware drawing.** Greying a disabled menu item or styling
-  the active window's frame at draw time needs the `CommandSet`/focus state in
-  `draw` (today only `handle_event` sees them). Same family as `view.md`'s
-  focus-in-draw deferral; revisit in Phase 5.
+- **Disabled-item drawing.** Greying a disabled menu item still needs the
+  `CommandSet` in `draw` (today only `handle_event` sees it). The sibling
+  *focus*-in-draw half is now solved (ADR 0017's `set_focused`); the command-state
+  half is a small follow-on when it matters.
 - **Mouse behaviour** (click-to-open menus, click-outside-to-close, drag) — Phase 9.
-- **`exec_view` reconciliation.** When the Phase 5 modal loop lands, the pull-down
-  can become a modal view; the shell's layout/overlay and the `MenuBar` data stay.
+- **`exec_view` reconciliation.** The Phase 5 modal loop now exists
+  ([`dialog.md`](dialog.md)), so the pull-down *could* become a modal view; left as
+  a later cleanup — the shell's layout/overlay and the `MenuBar` data are unchanged.

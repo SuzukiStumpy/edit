@@ -44,11 +44,17 @@ impl InputLine {
 
     /// Seeds the field with `text`, placing the cursor at the end.
     pub fn with_text(mut self, text: &str) -> Self {
+        self.set_text(text);
+        self
+    }
+
+    /// Replaces the value with `text`, placing the cursor at the end and
+    /// re-scrolling to show it (e.g. when a file picker mirrors a list selection).
+    pub fn set_text(&mut self, text: &str) {
         self.text = text.to_string();
         self.cursor = self.len();
         self.scroll = 0;
         self.ensure_visible();
-        self
     }
 
     /// The current value.

@@ -167,16 +167,41 @@ relays out, the terminal is always restored).
 
 ---
 
-## Phase 5 — Dialogs & controls
+## Phase 5 — Dialogs & controls ✅
 
-- `widgets::Dialog` (modal) + `app::exec_view` modal loop returning a command.
+- `widgets::Dialog` (modal) + `app::exec_view` modal loop returning a command. ✅
 - Controls: `Button`, `InputLine`, `Label`, `CheckBox`, `RadioButtons`,
-  `ListBox`/`ListViewer`, `ScrollBar`.
+  `ListBox`/`ListViewer`, `ScrollBar`. ✅
 - `MessageBox` (info/confirm); a file **Open/Save** dialog (`ListBox` +
-  `InputLine` + `std::fs` directory listing).
+  `InputLine` + `std::fs` directory listing). ✅
 
-**Tests first:** each control via scripted events + snapshots; `exec_view`
-returns the right command for OK/Cancel; file dialog navigation.
+**Decisions made while building (see `docs/specs/controls.md`, `dialog.md`, ADR 0017):**
+- **The modal loop lives on `Application`.** `exec_view(background, modal)` reuses
+  the owned terminal and the same draw→present→poll→drain shape as `run`: it draws
+  the background (no events to it), centres and draws the modal on top, and returns
+  the first *ending* command the modal posts. No terminal handle escapes into the
+  view tree. It runs any `view::Modal` (a `View` that knows its size + ending
+  commands), so `Dialog` and `FileDialog` both drop in.
+- **Focus-in-draw is a push, not a draw-time argument.** `View::set_focused` (a
+  defaulted no-op) lets a control store its focus and draw itself focused; `Group`
+  pushes it as focus moves. The `draw(&self, Canvas)` signature is unchanged — this
+  resolved the Phase 3/4 focus-in-draw deferral (ADR 0017). A richer `DrawContext`
+  (theme/cursor too) is left for later if needed.
+- **Controls keep `Enter` for the dialog.** Buttons activate on `Enter`/`Space`;
+  the input line, check box, radio group, and list deliberately *ignore* `Enter`
+  so it bubbles to the dialog's default button. `Esc` always cancels.
+- **The file dialog reads through an injected closure** (real `std::fs` by
+  default), so directory navigation is unit-tested without touching the
+  filesystem.
+
+**Tests (done):** each control via scripted events + snapshots; `exec_view`
+returns OK on the default button and Cancel on `Esc` (scripted terminal); file
+dialog lists dirs-first, navigates in/out, and builds the chosen path.
+
+**Exit (met):** `cargo test` green (179 rvision unit tests); `cargo run -p rvision
+--example dialogs` is the on-a-real-terminal check — a welcome box, a settings
+dialog exercising every control, a file picker, and a closing summary, all
+keyboard-driven with the terminal always restored.
 
 ---
 

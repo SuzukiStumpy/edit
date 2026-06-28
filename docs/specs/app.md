@@ -34,6 +34,10 @@ impl<T: Backend + EventSource> Application<T> {
     pub fn terminal(&self) -> &T;
     pub fn terminal_mut(&mut self) -> &mut T;
     pub fn run(&mut self, program: &mut impl Program) -> io::Result<()>;
+    // Phase 5 (ADR 0017): run a modal view over a drawn background, returning the
+    // command that closed it. See dialog.md.
+    pub fn exec_view(&mut self, background: &mut dyn Program, modal: &mut dyn Modal)
+        -> io::Result<Command>;
 }
 ```
 
