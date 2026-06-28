@@ -60,19 +60,34 @@ correctly. No real terminal yet.
 
 ---
 
-## Phase 2 — Real terminal & event loop
+## Phase 2 — Real terminal & event loop ⏳ (code complete; awaiting manual verify)
 
 - `event`: `Event { Key, Mouse, Command, Broadcast, Resize, Idle }`,
-  `EventResult { Consumed, Ignored }` (ADR 0004).
+  `EventResult { Consumed, Ignored }` (ADR 0004). ✅
 - `backend::EventSource` trait (input half of the ADR 0002 seam) + the
   `CrosstermBackend`/crossterm event source; raw mode, alternate screen, flush the
-  diff via crossterm, map crossterm input → our `Event`. Activate `crossterm`.
+  diff via crossterm, map crossterm input → our `Event`. Activate `crossterm`. ✅
 - `app::Application` skeleton: init → `poll(timeout)`/`read` loop → draw →
-  teardown. Panic-safe RAII restore + panic hook.
-- An `examples/` demo that paints a screen and quits on Ctrl-Q.
+  teardown. Panic-safe RAII restore + panic hook. ✅
+- An `examples/` demo that paints a screen and quits on Ctrl-Q. ✅
+  (`cargo run -p rvision --example hello`)
 
-**Exit (first manual verify on Linux):** `cargo run` shows a drawn screen, resizes
-cleanly, and always restores the terminal — even on panic.
+**Decisions made while building (see `docs/specs/`):**
+- `Backend::present` is now `-> io::Result<()>`: a real flush is fallible, and the
+  loop must surface I/O errors. `TestBackend` returns `Ok(())`.
+- `CrosstermBackend` implements *both* `Backend` and `EventSource` (it owns one
+  terminal); `Application` is generic over `T: Backend + EventSource`. It lives in
+  its own `crossterm_backend` module so crossterm stays confined (ADR 0001).
+- The loop drives a `Program` trait (`draw`/`handle_event`/`is_finished`). Quit is
+  a flag the program sets (no command bubbling yet); Phase 3 replaces this with a
+  `cmQuit` command up the owner chain. `Program` is a stepping stone to the Phase 3
+  view-tree root.
+- The pure `map_event` (crossterm → our `Event`) is the unit-tested core; live
+  terminal I/O is checked by the demo.
+
+**Exit (first manual verify on Linux — to do by hand, no TTY in this env):**
+`cargo run -p rvision --example hello` shows a drawn screen, resizes cleanly, and
+always restores the terminal — even on panic (uncomment the `panic!` in the demo).
 
 ---
 
