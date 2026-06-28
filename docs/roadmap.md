@@ -130,15 +130,40 @@ end-to-end through the scripted backend.
 
 ---
 
-## Phase 4 — Application chrome
+## Phase 4 — Application chrome ✅
 
-- `app`: `Application`/`Program` + `Desktop` (background group) + blue backdrop.
-- `widgets::Window` + `Frame` (title, close/zoom glyphs; drag/resize is Phase 9).
-- `widgets::MenuBar` + pull-down `Menu` (navigation, accelerators, dispatch).
-- `widgets::StatusLine` (status items + context hints).
+- `widgets::Background` + `widgets::Desktop` (blue backdrop + a stack of windows,
+  the top one active). ✅
+- `widgets::Frame` + `widgets::Window` (title, close/zoom glyphs, doubled border
+  when active; drag/resize is Phase 9). ✅
+- `widgets::MenuBar` + pull-down `Menu` (navigation, accelerators, dispatch). ✅
+- `widgets::StatusLine` (labelled global hot-keys). ✅
+- `app::Shell` — the `TProgram`-style application root that lays the three out,
+  draws the menu overlay, and routes keys. ✅
 
-**Exit:** a recognisably TurboVision screen — menu bar, status line, empty blue
-desktop — driven entirely by the keyboard.
+**Decisions made while building (see `docs/specs/widgets.md`, `shell.md`, ADR 0016):**
+- **A purpose-built `app::Shell`, not a generic `Group`.** TurboVision's `TProgram`
+  needs live layout (regions carved from the terminal size each frame, so resize
+  relays out), a menu pull-down drawn as a full-frame **overlay** on top of
+  everything (a one-row menu bar can't draw below itself through a clipped child
+  canvas), and three local key passes — menu bar (pre-process: `Alt`-hot-keys and,
+  while open, modal) → active window (focused) → status line (post-process). The
+  generic event engine and `Group` stayed untouched (ADR 0016).
+- **The `Desktop` owns concrete `Window`s** (not `Box<dyn View>`) so it can mark
+  the active one; a `Window` wraps a `Box<dyn View>` interior (an editor in Phase
+  6) and paints its own background so a non-filling interior shows solid.
+- **Menu modality without `exec_view`.** The open/highlight state lives on the
+  `MenuBar` as a small state machine; Phase 5's modal `exec_view` will be able to
+  re-express the pull-down as a modal view without disturbing the data or layout.
+- **Deferred (noted in the specs):** greying disabled menu items / active-frame
+  styling at draw time (needs `CommandSet`/focus in `draw` — same family as the
+  Phase 5 focus-in-draw item); all menu/window **mouse** behaviour (Phase 9).
+
+**Exit (met):** a recognisably TurboVision screen — menu bar, status line, empty
+blue desktop with a framed window — driven entirely by the keyboard. The headless
+`Shell` snapshot composes the whole screen; `cargo run -p rvision --example chrome`
+is the on-a-real-terminal check (menus open on `Alt`/`F10`, `Alt-X` exits, resize
+relays out, the terminal is always restored).
 
 ---
 

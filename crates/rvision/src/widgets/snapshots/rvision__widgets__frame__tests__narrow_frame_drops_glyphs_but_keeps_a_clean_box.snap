@@ -1,0 +1,7 @@
+---
+source: crates/rvision/src/widgets/frame.rs
+expression: "render(&frame, 8, 3)"
+---
+┌─ X ──┐
+│      │
+└──────┘

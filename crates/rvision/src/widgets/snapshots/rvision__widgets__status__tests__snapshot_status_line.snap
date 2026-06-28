@@ -1,0 +1,5 @@
+---
+source: crates/rvision/src/widgets/status.rs
+expression: buf.to_text()
+---
+ F1 Help  Alt-X Exit

@@ -20,5 +20,7 @@ rewriting an old one.
 | [0012](0012-project-layout-workspace.md) | Workspace layout, Rust 2024, pinned MSRV, hand-rolled errors |
 | [0013](0013-test-strategy-layered-insta.md) | Layered tests + insta snapshots |
 | [0014](0014-documentation-process.md) | Full documentation process |
+| [0015](0015-view-coordinates-canvas.md) | Owner-relative view coordinates via a translating `Canvas` |
+| [0016](0016-application-shell-menu-overlay.md) | `TProgram`-style application shell + drawn menu overlay |
 
 New decision? Copy [`0000-template.md`](0000-template.md).

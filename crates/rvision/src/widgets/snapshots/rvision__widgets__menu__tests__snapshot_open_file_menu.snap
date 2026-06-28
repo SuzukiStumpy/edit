@@ -1,0 +1,9 @@
+---
+source: crates/rvision/src/widgets/menu.rs
+expression: "render(&bar, 40, 6)"
+---
+ File  Edit                             
+┌─────────────────┐                     
+│ New      Ctrl-N │                     
+│ Open...  Ctrl-O │                     
+└─────────────────┘

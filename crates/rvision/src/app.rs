@@ -14,8 +14,10 @@ use crate::backend::{Backend, EventSource};
 use crate::buffer::Buffer;
 use crate::canvas::Canvas;
 use crate::command::{CM_QUIT, CommandSet};
-use crate::event::{Event, EventResult};
+use crate::event::{Event, EventResult, MouseEvent};
+use crate::geometry::{Point, Rect, Size};
 use crate::view::{Context, View};
+use crate::widgets::{Desktop, MenuBar, StatusLine};
 use std::collections::VecDeque;
 use std::io;
 use std::time::Duration;
@@ -210,15 +212,161 @@ impl Program for Root {
     }
 }
 
+/// The standard application screen: a menu bar across the top, a status line
+/// across the bottom, and a desktop filling the space between — TurboVision's
+/// `TProgram` (ADR 0016).
+///
+/// `Shell` is itself a [`View`], so it drops into a [`Root`] and runs in the
+/// [`Application`] loop. Unlike a generic [`Group`](crate::view::Group) it:
+///
+/// - **lays out live**: each frame it carves the three regions from the terminal
+///   size, so a resize relays them out (windows inside the desktop keep their
+///   place);
+/// - **draws the menu overlay last**: an open pull-down paints over the whole
+///   frame, on top of everything (the menu bar's own row is only one tall);
+/// - **routes keys in three local passes** — menu bar (pre-process: `Alt`-hot-keys
+///   and, while open, modally), then the desktop's active window (focused), then
+///   the status line (post-process: global function keys). The generic event
+///   engine is untouched; these passes live only here, where the only views that
+///   need them are.
+pub struct Shell {
+    menu_bar: MenuBar,
+    desktop: Desktop,
+    status_line: StatusLine,
+    size: Size,
+}
+
+/// The three chrome regions for a terminal of `size`: the menu-bar row, the
+/// desktop between, and the status-line row.
+struct Regions {
+    menu: Rect,
+    desktop: Rect,
+    status: Rect,
+}
+
+fn regions(size: Size) -> Regions {
+    let w = size.width.max(0);
+    let h = size.height.max(0);
+    Regions {
+        menu: Rect::from_origin_size(Point::new(0, 0), Size::new(w, 1)),
+        desktop: Rect::from_origin_size(Point::new(0, 1), Size::new(w, (h - 2).max(0))),
+        status: Rect::from_origin_size(Point::new(0, (h - 1).max(0)), Size::new(w, 1)),
+    }
+}
+
+impl Shell {
+    /// Assembles a shell for a terminal of `size` from its three chrome pieces,
+    /// positioning each to the matching region.
+    pub fn new(size: Size, menu_bar: MenuBar, desktop: Desktop, status_line: StatusLine) -> Self {
+        let mut shell = Self {
+            menu_bar,
+            desktop,
+            status_line,
+            size,
+        };
+        shell.relayout(size);
+        shell
+    }
+
+    /// Whether a menu pull-down is currently open (the menu bar runs modally then).
+    pub fn menu_is_open(&self) -> bool {
+        self.menu_bar.is_open()
+    }
+
+    /// Repositions the three children for a terminal of `size`.
+    fn relayout(&mut self, size: Size) {
+        self.size = size;
+        let r = regions(size);
+        self.menu_bar.set_bounds(r.menu);
+        self.desktop.set_bounds(r.desktop);
+        self.status_line.set_bounds(r.status);
+    }
+
+    /// Three-pass key routing (ADR 0016): menu bar → active window → status line.
+    fn handle_key(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
+        self.menu_bar
+            .handle_event(event, ctx)
+            .or_else(|| self.desktop.handle_event(event, ctx))
+            .or_else(|| self.status_line.handle_event(event, ctx))
+    }
+
+    /// Positional routing: the region under the pointer, in that region's local
+    /// coordinates. (Behaviour inside each region is mostly Phase 9; the seam is
+    /// here from the start — ADR 0007.)
+    fn handle_mouse(&mut self, mouse: MouseEvent, ctx: &mut Context) -> EventResult {
+        let r = regions(self.size);
+        for (region, target) in [
+            (r.menu, &mut self.menu_bar as &mut dyn View),
+            (r.status, &mut self.status_line as &mut dyn View),
+            (r.desktop, &mut self.desktop as &mut dyn View),
+        ] {
+            if region.contains(mouse.pos) {
+                let local = MouseEvent {
+                    pos: mouse.pos.offset(-region.origin().x, -region.origin().y),
+                    ..mouse
+                };
+                return target.handle_event(&Event::Mouse(local), ctx);
+            }
+        }
+        EventResult::Ignored
+    }
+}
+
+impl View for Shell {
+    fn bounds(&self) -> Rect {
+        Rect::from_origin_size(Point::new(0, 0), self.size)
+    }
+
+    fn draw(&self, canvas: &mut Canvas) {
+        let r = regions(canvas.size());
+        // Each child draws through a sub-canvas scoped so its borrow ends before
+        // the next one reborrows the frame.
+        self.desktop.draw(&mut canvas.child(r.desktop));
+        self.status_line.draw(&mut canvas.child(r.status));
+        self.menu_bar.draw(&mut canvas.child(r.menu));
+        // The open pull-down is the last thing drawn, over the whole frame, so it
+        // sits on top of the desktop below the bar (ADR 0016).
+        self.menu_bar.draw_overlay(canvas);
+    }
+
+    fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
+        match event {
+            Event::Key(_) => self.handle_key(event, ctx),
+            Event::Mouse(mouse) => self.handle_mouse(*mouse, ctx),
+            // A re-dispatched command (ADR 0003) goes to the active window; CM_QUIT
+            // never reaches here — `Root` claims it before re-dispatch.
+            Event::Command(_) => self.desktop.handle_event(event, ctx),
+            Event::Resize(size) => {
+                self.relayout(*size);
+                self.desktop.handle_event(event, ctx);
+                EventResult::Ignored
+            }
+            Event::Broadcast(_) | Event::Idle => {
+                self.menu_bar.handle_event(event, ctx);
+                self.desktop.handle_event(event, ctx);
+                self.status_line.handle_event(event, ctx);
+                EventResult::Ignored
+            }
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backend::TestBackend;
+    use crate::cell::Cell;
     use crate::color::Style;
     use crate::command::{CM_USER, Command};
     use crate::event::{KeyCode, KeyEvent, Modifiers};
     use crate::geometry::{Point, Rect, Size};
+    use crate::theme::Theme;
     use crate::view::StaticText;
+    use crate::widgets::{Menu, MenuItem, StatusItem, Window};
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
@@ -493,5 +641,153 @@ mod tests {
         assert!(root.is_finished());
         assert!(app.terminal().presents() >= 1);
         assert!(app.terminal().screen_text().starts_with('P'));
+    }
+
+    // --- Shell: the TProgram-style application root (Phase 4) ---
+
+    const CM_PING: Command = Command(CM_USER + 10);
+    const CM_HELP: Command = Command(CM_USER + 11);
+
+    /// Builds a shell with one window whose interior posts [`CM_PING`] on `a`, a
+    /// File/Edit menu bar, and an F1/Alt-X status line.
+    fn shell(size: Size, received: Rc<RefCell<Vec<Command>>>) -> Shell {
+        use crate::theme::Role;
+        let theme = Theme::default();
+        let (w, h) = (size.width, size.height);
+
+        let menu_bar = MenuBar::new(
+            full(Size::new(w, 1)),
+            vec![
+                Menu::new("File", vec![MenuItem::new("Exit", CM_QUIT)]),
+                Menu::new("Edit", vec![MenuItem::new("Copy", Command(CM_USER + 20))]),
+            ],
+            &theme,
+        );
+        let window = Window::new(
+            Rect::from_origin_size(Point::new(2, 1), Size::new(30, 6)),
+            "Untitled",
+            &theme,
+            Box::new(Poster {
+                bounds: full(Size::new(28, 4)),
+                on_key: KeyCode::Char('a'),
+                command: CM_PING,
+                received,
+            }),
+        );
+        let desktop = Desktop::new(
+            Rect::from_origin_size(Point::new(0, 1), Size::new(w, h - 2)),
+            Cell::from_char('░', theme.style(Role::DesktopBackground)),
+            vec![window],
+        );
+        let status = StatusLine::new(
+            Rect::from_origin_size(Point::new(0, h - 1), Size::new(w, 1)),
+            vec![
+                StatusItem::new(
+                    "F1",
+                    "Help",
+                    KeyEvent::new(KeyCode::F(1), Modifiers::NONE),
+                    CM_HELP,
+                ),
+                StatusItem::new(
+                    "Alt-X",
+                    "Exit",
+                    KeyEvent::new(KeyCode::Char('x'), Modifiers::ALT),
+                    CM_QUIT,
+                ),
+            ],
+            theme.style(Role::StatusBar),
+            theme.style(Role::StatusKey),
+        );
+        Shell::new(size, menu_bar, desktop, status)
+    }
+
+    fn no_log() -> Rc<RefCell<Vec<Command>>> {
+        Rc::new(RefCell::new(Vec::new()))
+    }
+
+    #[test]
+    fn snapshot_shell_composes_the_full_screen() {
+        let sh = shell(Size::new(40, 10), no_log());
+        let mut frame = Buffer::new(Size::new(40, 10));
+        let mut canvas = Canvas::new(&mut frame);
+        sh.draw(&mut canvas);
+        insta::assert_snapshot!(frame.to_text());
+    }
+
+    #[test]
+    fn a_plain_key_reaches_the_active_window() {
+        let mut sh = shell(Size::new(40, 10), no_log());
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // Closed menu: 'a' flows past the bar to the active window, which posts ping.
+        sh.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE)),
+            &mut ctx,
+        );
+        assert_eq!(ctx.posted(), &[Event::Command(CM_PING)]);
+    }
+
+    #[test]
+    fn an_open_menu_swallows_typing_so_the_window_never_sees_it() {
+        let mut sh = shell(Size::new(40, 10), no_log());
+        let cs = CommandSet::new();
+        sh.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Char('f'), Modifiers::ALT)),
+            &mut Context::new(&cs),
+        );
+        assert!(sh.menu_is_open());
+        // 'a' now goes to the modal menu, not the window: no ping is posted.
+        let mut ctx = Context::new(&cs);
+        sh.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE)),
+            &mut ctx,
+        );
+        assert!(ctx.posted().is_empty());
+        assert!(sh.menu_is_open());
+    }
+
+    #[test]
+    fn a_function_key_falls_through_to_the_status_line() {
+        let mut sh = shell(Size::new(40, 10), no_log());
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // The window's interior ignores F1, so the post-process status line claims it.
+        sh.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::F(1), Modifiers::NONE)),
+            &mut ctx,
+        );
+        assert_eq!(ctx.posted(), &[Event::Command(CM_HELP)]);
+    }
+
+    #[test]
+    fn resize_relays_out_the_chrome() {
+        let mut sh = shell(Size::new(20, 6), no_log());
+        sh.handle_event(
+            &Event::Resize(Size::new(30, 8)),
+            &mut Context::new(&CommandSet::new()),
+        );
+        assert_eq!(sh.size, Size::new(30, 8));
+        // Drawn at the new size, the status line lands on the new bottom row (7).
+        let mut frame = Buffer::new(Size::new(30, 8));
+        let mut canvas = Canvas::new(&mut frame);
+        sh.draw(&mut canvas);
+        let text = frame.to_text();
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows[7].trim_start().starts_with("F1 Help"));
+    }
+
+    #[test]
+    fn application_runs_the_shell_until_a_status_key_posts_cm_quit() {
+        // End-to-end: Alt-X reaches the status line (the window ignores it), which
+        // posts CM_QUIT; Root claims it and the loop exits.
+        let alt_x = Event::Key(KeyEvent::new(KeyCode::Char('x'), Modifiers::ALT));
+        let terminal = ScriptedTerminal::new(Size::new(40, 10), vec![Some(alt_x)]);
+        let mut app = Application::new(terminal);
+        let mut root = Root::new(Box::new(shell(Size::new(40, 10), no_log())));
+
+        app.run(&mut root).unwrap();
+
+        assert!(root.is_finished());
+        assert!(app.terminal().presents() >= 1);
     }
 }

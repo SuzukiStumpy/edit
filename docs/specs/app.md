@@ -1,9 +1,10 @@
 # Module spec: `rvision::app`
 
-- **Status:** In progress
-- **Phase:** 2 (real terminal & event loop) — grows into the desktop in Phase 4
+- **Status:** Done (loop + `Root`); the Phase 4 application root `Shell` is specced
+  separately in [`shell.md`](shell.md)
+- **Phase:** 2 (real terminal & event loop); `app::Shell` added in Phase 4
 - **Related ADRs:** 0002 (Backend/EventSource seam), 0004 (events), 0001 (panic-safe
-  terminal restore lives at the crossterm boundary)
+  terminal restore lives at the crossterm boundary), 0016 (`Shell`)
 
 ## Purpose
 
