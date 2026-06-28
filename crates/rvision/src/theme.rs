@@ -38,11 +38,16 @@ pub enum Role {
     EditorText,
     /// Selected (highlighted) text.
     Selection,
+    /// A dialog box's background, frame, and label text (the classic grey dialog).
+    DialogBackground,
+    /// An editable input field (an [`InputLine`](crate::widgets::InputLine), a
+    /// list-box interior).
+    Input,
 }
 
 impl Role {
     /// Every role, in discriminant order (so `ALL[i] as usize == i`).
-    pub const ALL: [Role; 12] = [
+    pub const ALL: [Role; 14] = [
         Role::DesktopBackground,
         Role::WindowFrame,
         Role::WindowTitle,
@@ -55,6 +60,8 @@ impl Role {
         Role::ButtonFocused,
         Role::EditorText,
         Role::Selection,
+        Role::DialogBackground,
+        Role::Input,
     ];
 
     /// The number of roles.
@@ -100,6 +107,8 @@ impl Default for Theme {
         styles[Role::ButtonFocused as usize] = cga(Color16::White, Color16::Green);
         styles[Role::EditorText as usize] = cga(Color16::White, Color16::Blue);
         styles[Role::Selection as usize] = cga(Color16::Black, Color16::Cyan);
+        styles[Role::DialogBackground as usize] = cga(Color16::Black, Color16::LightGray);
+        styles[Role::Input as usize] = cga(Color16::Black, Color16::White);
         Self { styles }
     }
 }
@@ -128,6 +137,12 @@ mod tests {
             t.style(Role::EditorText),
             cga(Color16::White, Color16::Blue)
         );
+        // Phase 5 dialog/control roles.
+        assert_eq!(
+            t.style(Role::DialogBackground),
+            cga(Color16::Black, Color16::LightGray)
+        );
+        assert_eq!(t.style(Role::Input), cga(Color16::Black, Color16::White));
     }
 
     #[test]

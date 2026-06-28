@@ -8,15 +8,19 @@
 //! overlay, and routes accelerators is [`crate::app::Shell`] (ADR 0016).
 
 mod background;
+mod button;
 mod desktop;
 mod frame;
+mod label;
 mod menu;
 mod status;
 mod window;
 
 pub use background::Background;
+pub use button::Button;
 pub use desktop::Desktop;
 pub use frame::Frame;
+pub use label::Label;
 pub use menu::{Menu, MenuBar, MenuItem};
 pub use status::{StatusItem, StatusLine};
 pub use window::Window;

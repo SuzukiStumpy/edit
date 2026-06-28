@@ -1,0 +1,5 @@
+---
+source: crates/rvision/src/widgets/button.rs
+expression: buf.to_text()
+---
+   Cancel

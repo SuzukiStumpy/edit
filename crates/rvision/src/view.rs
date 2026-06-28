@@ -44,6 +44,17 @@ pub trait View {
     fn focusable(&self) -> bool {
         false
     }
+
+    /// Notifies the view that it has gained (`true`) or lost (`false`) the
+    /// keyboard focus, so a focusable view can draw itself focused (ADR 0017).
+    ///
+    /// The owning [`Group`] pushes this as focus moves; the default ignores it,
+    /// so a view that does not draw differently when focused need not implement
+    /// it. A `Group` forwards a `set_focused` it receives to its own focused
+    /// child, so the signal composes through nested groups.
+    fn set_focused(&mut self, focused: bool) {
+        let _ = focused;
+    }
 }
 
 /// A handler's outbound channel: how a view posts commands and queries command
@@ -138,9 +149,13 @@ pub struct Group {
 
 impl Group {
     /// Creates a group occupying `bounds` that owns `children`. Focus starts on
-    /// the first focusable child, or `None` if there is none.
-    pub fn new(bounds: Rect, children: Vec<Box<dyn View>>) -> Self {
+    /// the first focusable child, or `None` if there is none; that child is told
+    /// it holds the focus (ADR 0017).
+    pub fn new(bounds: Rect, mut children: Vec<Box<dyn View>>) -> Self {
         let focused = children.iter().position(|child| child.focusable());
+        if let Some(index) = focused {
+            children[index].set_focused(true);
+        }
         Self {
             bounds,
             children,
@@ -219,7 +234,14 @@ impl Group {
             None if forward => 0,
             None => len - 1,
         };
-        self.focused = Some(focusable[next]);
+        let next_index = focusable[next];
+        if self.focused != Some(next_index) {
+            if let Some(old) = self.focused {
+                self.children[old].set_focused(false);
+            }
+            self.children[next_index].set_focused(true);
+            self.focused = Some(next_index);
+        }
         EventResult::Consumed
     }
 }
@@ -249,6 +271,15 @@ impl View for Group {
     fn focusable(&self) -> bool {
         // A group can take focus iff it has a focusable child to delegate to.
         self.focused.is_some()
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        // Forward to the focused child so the signal composes through nesting
+        // (ADR 0017): an outer group telling this one it (lost) gained focus
+        // (un)focuses whichever of our children currently holds it.
+        if let Some(index) = self.focused {
+            self.children[index].set_focused(focused);
+        }
     }
 }
 
@@ -511,6 +542,95 @@ mod tests {
             group.handle_event(&mouse_down_at(1, 1), &mut ctx),
             EventResult::Ignored
         );
+    }
+
+    // --- Focus notification (ADR 0017) ---
+
+    /// A focusable leaf that records its current focus flag, set by its owner.
+    struct FocusSpy {
+        bounds: Rect,
+        focused: Rc<RefCell<bool>>,
+    }
+
+    impl View for FocusSpy {
+        fn bounds(&self) -> Rect {
+            self.bounds
+        }
+        fn draw(&self, _canvas: &mut Canvas) {}
+        fn focusable(&self) -> bool {
+            true
+        }
+        fn set_focused(&mut self, focused: bool) {
+            *self.focused.borrow_mut() = focused;
+        }
+    }
+
+    #[test]
+    fn group_tells_its_initial_focused_child_it_has_focus() {
+        let a = Rc::new(RefCell::new(false));
+        let b = Rc::new(RefCell::new(false));
+        let _group = Group::new(
+            rect(0, 0, 10, 3),
+            vec![
+                Box::new(StaticText::new(rect(0, 0, 5, 1), "x", Style::new())),
+                Box::new(FocusSpy {
+                    bounds: rect(0, 1, 5, 1),
+                    focused: Rc::clone(&a),
+                }),
+                Box::new(FocusSpy {
+                    bounds: rect(0, 2, 5, 1),
+                    focused: Rc::clone(&b),
+                }),
+            ],
+        );
+        assert!(
+            *a.borrow(),
+            "the first focusable child is told it has focus"
+        );
+        assert!(!*b.borrow(), "a later child is not");
+    }
+
+    #[test]
+    fn tab_moves_the_focus_flag_between_children() {
+        let a = Rc::new(RefCell::new(false));
+        let b = Rc::new(RefCell::new(false));
+        let mut group = Group::new(
+            rect(0, 0, 10, 3),
+            vec![
+                Box::new(FocusSpy {
+                    bounds: rect(0, 0, 5, 1),
+                    focused: Rc::clone(&a),
+                }),
+                Box::new(FocusSpy {
+                    bounds: rect(0, 1, 5, 1),
+                    focused: Rc::clone(&b),
+                }),
+            ],
+        );
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        group.handle_event(&key(KeyCode::Tab), &mut ctx);
+        assert!(!*a.borrow(), "the old focus child is told it lost focus");
+        assert!(*b.borrow(), "the new focus child is told it gained focus");
+    }
+
+    #[test]
+    fn a_group_forwards_focus_to_its_focused_child() {
+        // An outer container telling a nested group it lost focus must reach the
+        // grandchild that actually holds it (composition, ADR 0017).
+        let leaf = Rc::new(RefCell::new(false));
+        let mut group = Group::new(
+            rect(0, 0, 10, 3),
+            vec![Box::new(FocusSpy {
+                bounds: rect(0, 0, 5, 1),
+                focused: Rc::clone(&leaf),
+            })],
+        );
+        assert!(*leaf.borrow());
+        group.set_focused(false);
+        assert!(!*leaf.borrow(), "the unfocus reached the grandchild");
+        group.set_focused(true);
+        assert!(*leaf.borrow());
     }
 
     // --- Commands: posting, gating, and bubbling ---
