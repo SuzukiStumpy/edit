@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod backend;
 pub mod buffer;
 pub mod cell;
 pub mod color;

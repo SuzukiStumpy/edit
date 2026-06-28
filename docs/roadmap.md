@@ -24,7 +24,7 @@ Rust toolchain isn't installed in this environment — see the report.*
 
 ---
 
-## Phase 1 — Rendering core + text model
+## Phase 1 — Rendering core + text model ✅
 
 Pure logic, ideal first TDD. Two parallel tracks.
 
@@ -38,31 +38,35 @@ Pure logic, ideal first TDD. Two parallel tracks.
 - `cell`: `Cell { grapheme, width, style }`; activate `unicode-width`.
 - `buffer`: `Buffer` (grid of cells) + draw primitives — `put_str` (width-aware,
   with wide-char continuation cells), `fill`, `draw_box`, `shadow`.
-- `backend`: `Backend` + `EventSource` traits; `TestBackend` (headless).
+- `backend`: `Backend` trait + `TestBackend` (headless). The input half,
+  `EventSource`, lands in Phase 2 with the `Event` type it carries.
 - diff: front/back double buffer producing a minimal change set (ADR 0002).
 - Snapshot harness: activate `insta`; helper to render a `Buffer` to a text grid.
 
-**Text-model track**
-- `text::TextBuffer` trait; line-array impl (`Vec<String>`); activate
+**Text-model track** — lives in the `edit` crate, not `rvision`: the document
+model is editor-specific, so it stays out of the framework (CLAUDE.md, ADR 0008).
+- `edit::text::TextBuffer` trait; line-array impl (`Vec<String>`); activate
   `unicode-segmentation` for grapheme navigation (ADR 0008).
-- `text::Edit` reversible operation type with `apply`/`invert`
+- `edit::text::Edit` reversible operation type with `apply`/`invert`
   (property test: `invert(apply(x)) == x`) (ADR 0011).
 
 **Tests first:** rect math; width of CJK/emoji/combining sequences; diff emits
 only changed cells; snapshot of a boxed, shadowed region; line split/join;
 grapheme cursor steps; `Edit` round-trip.
 
-**Exit:** can compose a styled screen in memory and snapshot it; text model
-edits and inverts correctly. No real terminal yet.
+**Exit (met):** a styled screen composes in memory, snapshots, and presents
+through a `Backend` emitting only changed cells; the text model edits and inverts
+correctly. No real terminal yet.
 
 ---
 
 ## Phase 2 — Real terminal & event loop
 
-- `backend::CrosstermBackend`: raw mode, alternate screen, flush the diff via
-  crossterm, map crossterm input → our `Event`. Activate `crossterm`.
 - `event`: `Event { Key, Mouse, Command, Broadcast, Resize, Idle }`,
   `EventResult { Consumed, Ignored }` (ADR 0004).
+- `backend::EventSource` trait (input half of the ADR 0002 seam) + the
+  `CrosstermBackend`/crossterm event source; raw mode, alternate screen, flush the
+  diff via crossterm, map crossterm input → our `Event`. Activate `crossterm`.
 - `app::Application` skeleton: init → `poll(timeout)`/`read` loop → draw →
   teardown. Panic-safe RAII restore + panic hook.
 - An `examples/` demo that paints a screen and quits on Ctrl-Q.
