@@ -9,6 +9,7 @@
 
 mod background;
 mod button;
+mod check_box;
 mod desktop;
 mod dialog;
 mod frame;
@@ -16,11 +17,13 @@ mod input_line;
 mod label;
 mod menu;
 mod message_box;
+mod radio_buttons;
 mod status;
 mod window;
 
 pub use background::Background;
 pub use button::Button;
+pub use check_box::CheckBox;
 pub use desktop::Desktop;
 pub use dialog::Dialog;
 pub use frame::Frame;
@@ -28,5 +31,6 @@ pub use input_line::InputLine;
 pub use label::Label;
 pub use menu::{Menu, MenuBar, MenuItem};
 pub use message_box::MessageBox;
+pub use radio_buttons::RadioButtons;
 pub use status::{StatusItem, StatusLine};
 pub use window::Window;
