@@ -30,6 +30,7 @@ name = "edit"
 version = "0.0.0"
 dependencies = [
  "rvision",
+ "unicode-segmentation",
 ]
 
 [[package]]

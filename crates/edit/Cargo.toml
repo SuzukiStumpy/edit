@@ -13,3 +13,4 @@ path = "src/main.rs"
 
 [dependencies]
 rvision = { path = "../rvision" }
+unicode-segmentation.workspace = true      # Phase 1 — grapheme navigation in the text model (ADR 0006, 0008)
