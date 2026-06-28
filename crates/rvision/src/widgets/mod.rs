@@ -10,17 +10,21 @@
 mod background;
 mod button;
 mod desktop;
+mod dialog;
 mod frame;
 mod label;
 mod menu;
+mod message_box;
 mod status;
 mod window;
 
 pub use background::Background;
 pub use button::Button;
 pub use desktop::Desktop;
+pub use dialog::Dialog;
 pub use frame::Frame;
 pub use label::Label;
 pub use menu::{Menu, MenuBar, MenuItem};
+pub use message_box::MessageBox;
 pub use status::{StatusItem, StatusLine};
 pub use window::Window;

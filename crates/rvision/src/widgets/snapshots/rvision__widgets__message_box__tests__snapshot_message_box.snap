@@ -1,0 +1,11 @@
+---
+source: crates/rvision/src/widgets/message_box.rs
+expression: buf.to_text()
+---
+┌───── Confirm ─────┐
+│                   │
+│   Save changes?   │
+│                   │
+│    Yes      No    │
+│                   │
+└───────────────────┘

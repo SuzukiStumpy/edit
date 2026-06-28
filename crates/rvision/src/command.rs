@@ -16,6 +16,10 @@ pub const CM_QUIT: Command = Command(1);
 pub const CM_OK: Command = Command(2);
 /// Dismiss a dialog without accepting (TurboVision's `cmCancel`).
 pub const CM_CANCEL: Command = Command(3);
+/// Affirmative answer to a confirmation (TurboVision's `cmYes`).
+pub const CM_YES: Command = Command(4);
+/// Negative answer to a confirmation (TurboVision's `cmNo`).
+pub const CM_NO: Command = Command(5);
 
 /// The first command id reserved for the **application**.
 ///
@@ -99,21 +103,25 @@ mod tests {
 
     #[test]
     fn standard_ids_are_distinct_and_non_zero() {
-        let ids = [CM_QUIT, CM_OK, CM_CANCEL];
+        let ids = [CM_QUIT, CM_OK, CM_CANCEL, CM_YES, CM_NO];
         for id in ids {
             assert_ne!(id.0, 0, "id 0 is reserved for 'no command'");
         }
         // No two standard commands collide.
-        assert_ne!(CM_QUIT, CM_OK);
-        assert_ne!(CM_OK, CM_CANCEL);
-        assert_ne!(CM_QUIT, CM_CANCEL);
+        let mut seen = BTreeSet::new();
+        for id in ids {
+            assert!(
+                seen.insert(id.0),
+                "{id:?} collides with another standard id"
+            );
+        }
     }
 
     #[test]
     fn standard_commands_sit_below_the_application_range() {
         // The framework's own commands live below CM_USER; apps number from there
         // up, so the two namespaces never collide (ADR 0003).
-        for id in [CM_QUIT, CM_OK, CM_CANCEL] {
+        for id in [CM_QUIT, CM_OK, CM_CANCEL, CM_YES, CM_NO] {
             assert!(id.0 < CM_USER, "{id:?} must be a framework-reserved id");
         }
     }

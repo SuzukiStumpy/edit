@@ -1,0 +1,11 @@
+---
+source: crates/rvision/src/widgets/dialog.rs
+expression: buf.to_text()
+---
+┌────── Confirm ───────┐
+│                      │
+│ Proceed?             │
+│                      │
+│    OK       Cancel   │
+│                      │
+└──────────────────────┘

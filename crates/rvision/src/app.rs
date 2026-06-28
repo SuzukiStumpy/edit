@@ -13,11 +13,11 @@
 use crate::backend::{Backend, EventSource};
 use crate::buffer::Buffer;
 use crate::canvas::Canvas;
-use crate::command::{CM_QUIT, CommandSet};
+use crate::command::{CM_QUIT, Command, CommandSet};
 use crate::event::{Event, EventResult, MouseEvent};
 use crate::geometry::{Point, Rect, Size};
 use crate::view::{Context, View};
-use crate::widgets::{Desktop, MenuBar, StatusLine};
+use crate::widgets::{Desktop, Dialog, MenuBar, StatusLine};
 use std::collections::VecDeque;
 use std::io;
 use std::time::Duration;
@@ -116,6 +116,100 @@ impl<T: Backend + EventSource> Application<T> {
         }
         Ok(())
     }
+
+    /// Runs `dialog` modally over `background`, returning the command that closed
+    /// it (ADR 0017) — TurboVision's `execView`.
+    ///
+    /// Each turn: build a frame at the terminal's current size, let `background`
+    /// **draw** (it receives no events while the dialog is up), centre the dialog
+    /// and draw it on top, present, then poll one event and hand it to the dialog.
+    /// A positional event is translated into the dialog's local coordinates. The
+    /// first *ending* command the dialog posts ([`Dialog::ends_on`]) returns from
+    /// the loop; any other posted command/broadcast is re-dispatched into the
+    /// dialog, exactly as [`Root`] drains the tree. `Esc` closes it as `CM_CANCEL`.
+    ///
+    /// The dialog never joins the application's view tree; it is the caller's,
+    /// borrowed for the duration of the loop and untouched afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any I/O error from presenting a frame or polling for events.
+    pub fn exec_view(
+        &mut self,
+        background: &mut dyn Program,
+        dialog: &mut Dialog,
+    ) -> io::Result<Command> {
+        let commands = CommandSet::new();
+        loop {
+            let size = self.terminal.size();
+            let mut frame = Buffer::new(size);
+            background.draw(&mut frame);
+
+            let area = centered(dialog.size(), size);
+            {
+                let mut canvas = Canvas::new(&mut frame);
+                let mut sub = canvas.child(area);
+                dialog.draw(&mut sub);
+            }
+            self.terminal.present(&frame)?;
+
+            let event = self
+                .terminal
+                .poll_event(self.timeout)?
+                .unwrap_or(Event::Idle);
+            // Translate a positional event into the dialog's local coordinates;
+            // everything else passes through unchanged.
+            let event = match event {
+                Event::Mouse(mouse) => Event::Mouse(MouseEvent {
+                    pos: mouse.pos.offset(-area.origin().x, -area.origin().y),
+                    ..mouse
+                }),
+                other => other,
+            };
+
+            if let Some(command) = dispatch_modal(dialog, &event, &commands) {
+                return Ok(command);
+            }
+        }
+    }
+}
+
+/// Centres a box of `size` within `within`, clamped to fit.
+fn centered(size: Size, within: Size) -> Rect {
+    let w = size.width.clamp(0, within.width.max(0));
+    let h = size.height.clamp(0, within.height.max(0));
+    let x = ((within.width - w) / 2).max(0);
+    let y = ((within.height - h) / 2).max(0);
+    Rect::from_origin_size(Point::new(x, y), Size::new(w, h))
+}
+
+/// Delivers one event to `dialog` and drains what it posts: a posted *ending*
+/// command (`Dialog::ends_on`) is returned to stop the modal loop; any other
+/// posted command/broadcast is re-dispatched into the dialog. Returns `None` if
+/// nothing ended the loop.
+fn dispatch_modal(dialog: &mut Dialog, event: &Event, commands: &CommandSet) -> Option<Command> {
+    let mut queue = VecDeque::new();
+    {
+        let mut ctx = Context::new(commands);
+        dialog.handle_event(event, &mut ctx);
+        queue.extend(ctx.take_posted());
+    }
+    let mut budget = MAX_POSTED_PER_EVENT;
+    while let Some(posted) = queue.pop_front() {
+        if let Event::Command(command) = posted {
+            if dialog.ends_on(command) {
+                return Some(command);
+            }
+        }
+        if budget == 0 {
+            break;
+        }
+        budget -= 1;
+        let mut ctx = Context::new(commands);
+        dialog.handle_event(&posted, &mut ctx);
+        queue.extend(ctx.take_posted());
+    }
+    None
 }
 
 /// The root of the view tree, adapted to the loop's [`Program`] contract.
@@ -361,7 +455,7 @@ mod tests {
     use crate::backend::TestBackend;
     use crate::cell::Cell;
     use crate::color::Style;
-    use crate::command::{CM_USER, Command};
+    use crate::command::{CM_CANCEL, CM_OK, CM_USER, Command};
     use crate::event::{KeyCode, KeyEvent, Modifiers};
     use crate::geometry::{Point, Rect, Size};
     use crate::theme::Theme;
@@ -789,5 +883,74 @@ mod tests {
 
         assert!(root.is_finished());
         assert!(app.terminal().presents() >= 1);
+    }
+
+    // --- exec_view: the modal dialog loop (Phase 5, ADR 0017) ---
+
+    /// A background program that just paints `BG` at the origin (outside any
+    /// centred dialog), so a test can confirm the background was drawn underneath.
+    #[derive(Default)]
+    struct Backdrop;
+
+    impl Program for Backdrop {
+        fn draw(&mut self, frame: &mut Buffer) {
+            frame.put_str(Point::new(0, 0), "BG", Style::new());
+        }
+        fn handle_event(&mut self, _event: &Event) -> EventResult {
+            EventResult::Ignored
+        }
+        fn is_finished(&self) -> bool {
+            false
+        }
+    }
+
+    fn message_box() -> crate::widgets::Dialog {
+        crate::widgets::MessageBox::ok_cancel("Confirm", "Proceed?", &Theme::default())
+    }
+
+    #[test]
+    fn exec_view_returns_ok_when_the_default_button_is_pressed() {
+        // Focus starts on the OK button; Enter activates it and ends the loop.
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        let terminal = ScriptedTerminal::new(Size::new(40, 12), vec![Some(enter)]);
+        let mut app = Application::new(terminal);
+        let mut background = Backdrop;
+        let mut dialog = message_box();
+
+        let result = app.exec_view(&mut background, &mut dialog).unwrap();
+        assert_eq!(result, CM_OK);
+        // The background was painted under the centred dialog, and we presented.
+        assert!(app.terminal().screen_text().starts_with("BG"));
+        assert!(app.terminal().presents() >= 1);
+    }
+
+    #[test]
+    fn exec_view_returns_cancel_on_esc() {
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE));
+        let terminal = ScriptedTerminal::new(Size::new(40, 12), vec![Some(esc)]);
+        let mut app = Application::new(terminal);
+        let mut background = Backdrop;
+        let mut dialog = message_box();
+
+        let result = app.exec_view(&mut background, &mut dialog).unwrap();
+        assert_eq!(result, CM_CANCEL);
+    }
+
+    #[test]
+    fn exec_view_idles_until_a_button_is_pressed() {
+        // A timed-out poll (None ⇒ Idle) keeps the loop alive without ending it;
+        // Tab then Enter selects Cancel.
+        let tab = Event::Key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE));
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        let terminal = ScriptedTerminal::new(Size::new(40, 12), vec![None, Some(tab), Some(enter)]);
+        let mut app = Application::new(terminal);
+        let mut background = Backdrop;
+        let mut dialog = message_box();
+
+        let result = app.exec_view(&mut background, &mut dialog).unwrap();
+        assert_eq!(
+            result, CM_CANCEL,
+            "Tab moved focus to Cancel, Enter chose it"
+        );
     }
 }
