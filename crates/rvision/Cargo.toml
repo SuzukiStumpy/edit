@@ -9,10 +9,10 @@ authors.workspace = true
 
 [dependencies]
 unicode-width.workspace = true             # Phase 1 — cell display width (ADR 0006)
+unicode-segmentation.workspace = true      # Phase 1 — grapheme segmentation (ADR 0006)
 # Activated per phase from the workspace budget:
-#   unicode-segmentation.workspace = true  # Phase 1 — grapheme navigation (text model)
 #   crossterm.workspace = true             # Phase 2 — CrosstermBackend
 # Adding anything beyond these requires a new ADR (see docs/adr/0001).
 
 [dev-dependencies]
-# insta.workspace = true                   # Phase 1 — snapshot render tests (ADR 0013)
+insta.workspace = true                     # Phase 1 — snapshot render tests (ADR 0013)

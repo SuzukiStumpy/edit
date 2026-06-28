@@ -84,6 +84,12 @@ impl Cell {
         Self::from_char(' ', style)
     }
 
+    /// Creates a zero-width continuation cell: the placeholder that occupies the
+    /// second column of a wide (two-column) cell. Renderers skip it.
+    pub fn continuation(style: Style) -> Self {
+        Self::new(Grapheme::new(""), style)
+    }
+
     /// The cell's grapheme.
     pub fn grapheme(&self) -> &Grapheme {
         &self.grapheme
@@ -139,6 +145,13 @@ mod tests {
     #[test]
     fn combining_mark_alone_is_zero_width() {
         assert_eq!(Grapheme::from_char('\u{0301}').width(), 0);
+    }
+
+    #[test]
+    fn continuation_is_zero_width_and_empty() {
+        let c = Cell::continuation(Style::new());
+        assert_eq!(c.width(), 0);
+        assert_eq!(c.grapheme().to_string(), "");
     }
 
     #[test]

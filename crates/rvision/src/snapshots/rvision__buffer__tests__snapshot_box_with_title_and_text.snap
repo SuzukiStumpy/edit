@@ -1,0 +1,8 @@
+---
+source: crates/rvision/src/buffer.rs
+expression: buf.to_text()
+---
+┌─ Edit ───┐
+│          │
+│ hi       │
+└──────────┘
