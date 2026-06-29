@@ -9,6 +9,7 @@
 
 use crate::canvas::Canvas;
 use crate::cell::Cell;
+use crate::color::Style;
 use crate::event::{Event, EventResult, MouseEvent};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::{Role, Theme};
@@ -22,6 +23,8 @@ pub struct Window {
     frame: Frame,
     active: bool,
     interior_fill: Cell,
+    shadow_style: Style,
+    casts_shadow: bool,
     interior: Box<dyn View>,
 }
 
@@ -39,8 +42,18 @@ impl Window {
             frame,
             active: false,
             interior_fill: Cell::blank(theme.style(Role::WindowFrame)),
+            shadow_style: theme.style(Role::Shadow),
+            casts_shadow: true,
             interior,
         }
+    }
+
+    /// Sets whether this window casts a drop shadow on what lies behind it
+    /// (default `true`). Turn it off for a window meant to sit flush — e.g. one
+    /// maximised to fill the desktop, whose shadow would only fall off-screen
+    /// (ADR 0020).
+    pub fn set_casts_shadow(&mut self, casts: bool) {
+        self.casts_shadow = casts;
     }
 
     /// The interior rectangle in the window's **local** coordinates: the whole
@@ -110,6 +123,10 @@ impl View for Window {
     fn focusable(&self) -> bool {
         true
     }
+
+    fn drop_shadow(&self) -> Option<Style> {
+        self.casts_shadow.then_some(self.shadow_style)
+    }
 }
 
 #[cfg(test)]
@@ -159,6 +176,23 @@ mod tests {
             Box::new(StaticText::new(rect(0, 0, 1, 1), "", Style::new())),
         );
         assert_eq!(w.interior_bounds(), rect(1, 1, 18, 6));
+    }
+
+    #[test]
+    fn casts_a_shadow_by_default_and_can_be_turned_off() {
+        let theme = Theme::default();
+        let mut w = Window::new(
+            rect(5, 2, 20, 8),
+            "T",
+            &theme,
+            Box::new(StaticText::new(rect(0, 0, 1, 1), "", Style::new())),
+        );
+        // Default: the window reports the theme's shadow style for its owner to
+        // paint (ADR 0020).
+        assert_eq!(w.drop_shadow(), Some(theme.style(Role::Shadow)));
+        // Turning it off makes it sit flush — no shadow reported.
+        w.set_casts_shadow(false);
+        assert_eq!(w.drop_shadow(), None);
     }
 
     #[test]

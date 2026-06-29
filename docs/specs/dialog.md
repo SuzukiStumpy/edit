@@ -30,7 +30,7 @@ impl View for Dialog { /* draws grey box + title + controls; routes keys/mouse *
 
 // app::Application::exec_view
 impl<T: Backend + EventSource> Application<T> {
-    pub fn exec_view(&mut self, background: &mut dyn Program, dialog: &mut Dialog) -> io::Result<Command>;
+    pub fn exec_view(&mut self, background: &mut dyn Program, dialog: &mut dyn Modal) -> io::Result<Command>;
 }
 
 // widgets::MessageBox — builds a Dialog
@@ -56,8 +56,10 @@ impl MessageBox {
 - **Ending commands.** `ends_on` is `true` for `CM_OK`/`CM_CANCEL` plus any added
   via `also_ends_on`. `exec_view` returns the first posted ending command.
 - **exec_view loop (ADR 0017).** Each turn: fresh frame at `terminal.size()`,
-  `background.draw` (no events to the background), centre the dialog and draw it
-  on top, present, poll one event, dispatch to the dialog under a fresh
+  `background.draw` (no events to the background), centre the dialog, paint its
+  `drop_shadow()` on the background then draw the dialog on top (ADR 0020 — any
+  `Modal`, hence `&mut dyn Modal`), present, poll one event, dispatch to the
+  dialog under a fresh
   (all-enabled) `CommandSet`. Drain posted events as `Root` does: a posted
   *ending* command returns from the loop; any other posted command/broadcast is
   re-dispatched into the dialog. The dialog never joins the application tree; it

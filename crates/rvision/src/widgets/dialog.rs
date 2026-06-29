@@ -25,6 +25,7 @@ pub struct Dialog {
     size: Size,
     title: String,
     style: Style,
+    shadow_style: Style,
     controls: Group,
     ending: Vec<Command>,
     default_cmd: Option<Command>,
@@ -41,6 +42,7 @@ impl Dialog {
             size,
             title: title.to_string(),
             style: theme.style(Role::DialogBackground),
+            shadow_style: theme.style(Role::Shadow),
             controls: Group::new(interior, controls),
             ending: vec![CM_OK, CM_CANCEL],
             default_cmd: None,
@@ -152,6 +154,11 @@ impl View for Dialog {
 
     fn focusable(&self) -> bool {
         true
+    }
+
+    fn drop_shadow(&self) -> Option<Style> {
+        // A modal always floats over the background, so it always casts (ADR 0020).
+        Some(self.shadow_style)
     }
 }
 

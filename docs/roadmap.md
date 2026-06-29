@@ -365,8 +365,14 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   - *Drop shadows.* A new `Canvas::shadow(area, style)` casts the classic TV shadow
     — a two-column strip down the right and a one-row strip below, offset `(2, 1)`,
     each cell dimmed in place (`Role::Shadow` = dark-gray on black) rather than
-    blanked. Editor windows cast it on the desktop (drawn before each window, so a
-    window sits on its own shadow); `exec_view` casts it under every modal.
+    blanked. *Who* casts it is a per-view protocol: `View::drop_shadow() ->
+    Option<Style>` (default `None`); a floating widget (`Window`, `Dialog`,
+    `FileDialog`) returns its resolved `Role::Shadow`, and the compositor
+    (`Group`/`Desktop`/`exec_view`) paints it before drawing the child on top, so
+    each view sits over its own shadow and a higher sibling's shadow falls on a
+    lower one (ADR 0020). `Window::set_casts_shadow(false)` opts a window out. The
+    editor's bespoke `draw_window` keeps its own `desk.shadow` call (ADR 0018) —
+    it draws no `Window` widget to carry the property.
   - *Active window title.* The focused window's title is bright + bold
     (`Role::WindowTitle`); inactive ones recede to a dimmer grey
     (`Role::WindowTitleInactive`), so the editing window reads at a glance.

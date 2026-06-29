@@ -32,6 +32,23 @@ pub trait View {
     /// the view's bounds: draw at local `(0, 0)` (ADR 0015).
     fn draw(&self, canvas: &mut Canvas);
 
+    /// The drop shadow this view casts onto its **owner's** surface, or `None`
+    /// (the default) if it casts none (ADR 0020).
+    ///
+    /// A shadow falls *outside* the view's own bounds — down its right and
+    /// bottom edges — so a view cannot paint it through its own clipped
+    /// [`draw`](Self::draw) canvas. Instead the owner reads this and paints
+    /// `canvas.shadow(child.bounds(), style)` on its own surface *before* drawing
+    /// the child on top, so each floating view sits over its own shadow and a
+    /// higher sibling's shadow falls on a lower one. A floating widget — a
+    /// [`Window`](crate::widgets::Window) or a modal
+    /// [`Dialog`](crate::widgets::Dialog) — returns the
+    /// [`Role::Shadow`](crate::theme::Role::Shadow) style it resolved at
+    /// construction; flush views (controls, the desktop backdrop) keep `None`.
+    fn drop_shadow(&self) -> Option<Style> {
+        None
+    }
+
     /// Handles one event, returning whether it was consumed (ADR 0004). A view
     /// emits its own commands by posting them to `ctx`; it never references
     /// another view.
@@ -282,6 +299,11 @@ impl View for Group {
 
     fn draw(&self, canvas: &mut Canvas) {
         for child in &self.children {
+            // A floating child casts its drop shadow on this group's surface
+            // before it — and any higher sibling — is drawn on top (ADR 0020).
+            if let Some(style) = child.drop_shadow() {
+                canvas.shadow(child.bounds(), style);
+            }
             let mut sub = canvas.child(child.bounds());
             child.draw(&mut sub);
         }
@@ -783,6 +805,58 @@ mod tests {
         let seen = log.borrow();
         let ids: Vec<u16> = seen.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, vec![1, 2], "both children saw the broadcast");
+    }
+
+    // --- Drop-shadow protocol (ADR 0020) ---
+
+    #[test]
+    fn a_plain_view_casts_no_shadow() {
+        let text = StaticText::new(rect(0, 0, 5, 1), "x", Style::new());
+        assert_eq!(text.drop_shadow(), None);
+    }
+
+    /// A view that fills itself with 'X' and casts a shadow in a given style.
+    struct ShadowBox {
+        bounds: Rect,
+        shadow: Style,
+    }
+
+    impl View for ShadowBox {
+        fn bounds(&self) -> Rect {
+            self.bounds
+        }
+        fn draw(&self, canvas: &mut Canvas) {
+            let area = canvas.bounds();
+            canvas.fill(area, &Cell::from_char('X', Style::new()));
+        }
+        fn drop_shadow(&self) -> Option<Style> {
+            Some(self.shadow)
+        }
+    }
+
+    #[test]
+    fn a_group_paints_a_childs_drop_shadow_outside_the_child() {
+        let shadow = crate::theme::Theme::default().style(crate::theme::Role::Shadow);
+        // A 5×3 child at (2, 2): its right strip starts at x = 7, its body at x = 2.
+        let group = Group::new(
+            rect(0, 0, 20, 10),
+            vec![Box::new(ShadowBox {
+                bounds: rect(2, 2, 5, 3),
+                shadow,
+            })],
+        );
+        let mut buf = Buffer::new(Size::new(20, 10));
+        let mut canvas = Canvas::new(&mut buf);
+        group.draw(&mut canvas);
+
+        // The right-edge shadow cell is repainted in the shadow style…
+        assert_eq!(buf.get(Point::new(7, 3)).unwrap().style(), shadow);
+        // …the child's own body sits on top, undimmed…
+        let body = buf.get(Point::new(3, 3)).unwrap();
+        assert_eq!(body.grapheme().to_string(), "X");
+        assert_eq!(body.style(), Style::new());
+        // …and a cell clear of both is untouched.
+        assert_eq!(buf.get(Point::new(0, 0)).unwrap().style(), Style::new());
     }
 
     #[test]

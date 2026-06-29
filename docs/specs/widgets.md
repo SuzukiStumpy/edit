@@ -46,14 +46,17 @@ impl Frame {
 }
 
 // --- Window: a framed box with an interior ---
-pub struct Window { bounds: Rect, frame: Frame, active: bool, interior: Box<dyn View> }
+pub struct Window { bounds, frame, active, interior, shadow_style, casts_shadow }
 impl Window {
     pub fn new(bounds: Rect, title: &str, theme: &Theme, interior: Box<dyn View>) -> Self;
     pub fn interior_bounds(&self) -> Rect;            // bounds inset by the frame
     pub fn is_active(&self) -> bool;
     pub fn set_active(&mut self, active: bool);        // the desktop marks the top window
+    pub fn set_casts_shadow(&mut self, casts: bool);   // default true (ADR 0020)
 }
-impl View for Window { /* focusable; draws frame then interior; routes to interior */ }
+// focusable; draws frame then interior; routes to interior;
+// drop_shadow() = Some(Role::Shadow) unless turned off
+impl View for Window { /* .. */ }
 
 // --- Desktop: backdrop + windows, with an active (top) window ---
 // Owns concrete Windows (not Box<dyn View>) so it can mark the active one.
@@ -113,10 +116,14 @@ impl View for MenuBar { /* draws the bar; handle_event runs the menu state machi
   9). Degrades without panic for tiny rects.
 - **Window.** Focusable. Interior is inset by one cell on every side. Draws the
   frame over its whole rect, then the interior through a `child()` sub-canvas; a
-  key/command routes to the interior, which may post commands (bubble up).
+  key/command routes to the interior, which may post commands (bubble up). Casts a
+  drop shadow by default — `drop_shadow()` returns its resolved `Role::Shadow`
+  (ADR 0020); `set_casts_shadow(false)` opts out (e.g. a maximised window).
 - **Desktop.** Always fills its area with the backdrop first, then draws windows in
-  vector order (index 0 bottom, last on top = active). Positional → topmost window
-  under the pointer; focused (key/command) → the active window; broadcast → all.
+  vector order (index 0 bottom, last on top = active), painting each window's
+  `drop_shadow()` on the backdrop (or a lower window) before the window itself.
+  Positional → topmost window under the pointer; focused (key/command) → the
+  active window; broadcast → all.
 - **StatusLine.** A `Key` whose code equals an item's `key` posts that item's
   command (enabled-gated by `Context`, ADR 0003) and is consumed; other events are
   ignored. Drawn left→right, each item's key glyph in `key_style`.

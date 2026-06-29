@@ -29,6 +29,7 @@ pub trait View {
     }
     fn focusable(&self) -> bool { false }     // can this view hold focus?
     fn set_focused(&mut self, focused: bool) {}  // owner pushes focus (ADR 0017)
+    fn drop_shadow(&self) -> Option<Style> { None }  // shadow the owner paints (ADR 0020)
 }
 
 // A view runnable modally by app::exec_view (ADR 0017): adds size + ending commands.
@@ -64,6 +65,12 @@ impl Group {
 - **Z-order.** `Group` draws children in vector order: index 0 is bottom, last is
   top; later children overwrite earlier ones where they overlap. Focus order is
   the same vector order among `focusable` children.
+- **Drop shadows (ADR 0020).** A shadow falls *outside* a view's clipped canvas,
+  so the view only *declares* it via `drop_shadow() -> Option<Style>` (default
+  `None`); the owner paints `canvas.shadow(child.bounds(), style)` just before
+  drawing each `Some` child. Painted per-child in z-order, so a view sits over its
+  own shadow and a higher sibling's shadow falls on a lower one. The view supplies
+  the style (resolved from its own `Role::Shadow`), keeping `Group` theme-free.
 - **Three-phase dispatch (per group, by event class — ADR 0004):**
   - *Positional* (`Mouse`): delivered to the **topmost** child whose `bounds`
     contain the pointer, with the position translated into that child's local

@@ -352,6 +352,11 @@ impl View for FileDialog {
     fn focusable(&self) -> bool {
         true
     }
+
+    fn drop_shadow(&self) -> Option<Style> {
+        // A modal always floats over the background, so it always casts (ADR 0020).
+        Some(self.theme.style(Role::Shadow))
+    }
 }
 
 impl Modal for FileDialog {

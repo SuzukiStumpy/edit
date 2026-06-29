@@ -68,6 +68,8 @@ snapshot tests.
 
 ## Open questions
 
-- `shadow` (dim a region for window drop-shadows) deferred until windows exist.
+- ~~`shadow` (dim a region for window drop-shadows) deferred until windows
+  exist.~~ Resolved (Phase 10): the dim-in-place primitive lives on `Canvas`, not
+  `Buffer` — see [canvas.md](canvas.md) `shadow` and the protocol in ADR 0020.
 - Style-aware snapshots deferred; Phase 1 snapshots assert text layout, styles
   are asserted via `get().style()`.

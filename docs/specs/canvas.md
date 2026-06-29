@@ -1,8 +1,8 @@
 # Module spec: `rvision::canvas`
 
 - **Status:** Done
-- **Phase:** 3 (View system)
-- **Related ADRs:** 0002 (render seam / `Buffer`), 0015 (owner-relative coords + Canvas)
+- **Phase:** 3 (View system); `shadow` added in Phase 10
+- **Related ADRs:** 0002 (render seam / `Buffer`), 0015 (owner-relative coords + Canvas), 0020 (drop-shadow protocol)
 
 ## Purpose
 
@@ -35,6 +35,11 @@ impl<'a> Canvas<'a> {
     pub fn put_str(&mut self, at: Point, s: &str, style: Style) -> i16;
     pub fn fill(&mut self, area: Rect, cell: &Cell);
     pub fn draw_box(&mut self, area: Rect, style: Style);
+
+    /// Cast a drop shadow for a box at `area`: a 2-col strip down its right and
+    /// a 1-row strip below, offset (2,1). Each shadowed cell keeps its grapheme
+    /// but is repainted in `style` (dimmed in place, not blanked). Phase 10.
+    pub fn shadow(&mut self, area: Rect, style: Style);
 }
 ```
 
@@ -55,6 +60,11 @@ just past the last cell written, like `Buffer::put_str`.
 - **Wide graphemes.** A width-2 cell whose continuation column would fall outside
   `clip` is dropped (blank), matching `Buffer`'s right-edge rule — no half-glyph
   spills across the boundary.
+- **`shadow` reads then repaints.** Unlike the other primitives it reads the
+  existing cells (to keep their graphemes), so the caller draws it *over* already-
+  composed content; clipped like everything else, so a box flush against an edge
+  casts no shadow there. *Who* calls it is the per-view protocol (ADR 0020): a
+  container paints a floating child's `drop_shadow()` before drawing the child.
 - **Negative/empty areas.** `child` of an empty or reversed `area` yields an empty
   clip; all primitives become no-ops. No panics for any input.
 - `size` is the view's nominal area even where `clip` is smaller (child clipped by

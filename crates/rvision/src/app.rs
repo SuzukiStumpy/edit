@@ -16,7 +16,6 @@ use crate::canvas::Canvas;
 use crate::command::{CM_QUIT, Command, CommandSet};
 use crate::event::{Event, EventResult, MouseEvent};
 use crate::geometry::{Point, Rect, Size};
-use crate::theme::{Role, Theme};
 use crate::view::{Context, Modal, View};
 use crate::widgets::{Desktop, MenuBar, StatusLine};
 use std::collections::VecDeque;
@@ -141,9 +140,6 @@ impl<T: Backend + EventSource> Application<T> {
         dialog: &mut dyn Modal,
     ) -> io::Result<Command> {
         let commands = CommandSet::new();
-        // A modal floats over the background, so it casts a drop shadow (Phase 10).
-        // The look is fixed (there is one theme yet), resolved from the default.
-        let shadow_style = Theme::default().style(Role::Shadow);
         loop {
             let size = self.terminal.size();
             let mut frame = Buffer::new(size);
@@ -152,7 +148,11 @@ impl<T: Backend + EventSource> Application<T> {
             let area = centered(dialog.size(), size);
             {
                 let mut canvas = Canvas::new(&mut frame);
-                canvas.shadow(area, shadow_style);
+                // The modal casts its own drop shadow on the background it floats
+                // over, through the per-view protocol (ADR 0020).
+                if let Some(style) = dialog.drop_shadow() {
+                    canvas.shadow(area, style);
+                }
                 let mut sub = canvas.child(area);
                 dialog.draw(&mut sub);
             }
@@ -463,7 +463,7 @@ mod tests {
     use crate::command::{CM_CANCEL, CM_OK, CM_USER, Command};
     use crate::event::{KeyCode, KeyEvent, Modifiers};
     use crate::geometry::{Point, Rect, Size};
-    use crate::theme::Theme;
+    use crate::theme::{Role, Theme};
     use crate::view::StaticText;
     use crate::widgets::{Menu, MenuItem, StatusItem, Window};
     use std::cell::RefCell;

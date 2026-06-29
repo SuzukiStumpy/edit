@@ -25,5 +25,6 @@ rewriting an old one.
 | [0017](0017-modal-dialogs-and-focus-aware-controls.md) | Modal dialogs via `exec_view` + focus-aware controls (`set_focused`) |
 | [0018](0018-editor-app-bespoke-driver-loop.md) | Editor uses a bespoke driver loop interleaving `exec_view` |
 | [0019](0019-clipboard-app-owned-command-routed.md) | Clipboard is app-owned and reached by commands |
+| [0020](0020-drop-shadows-per-view-protocol.md) | Drop shadows are a per-view protocol (`View::drop_shadow`) |
 
 New decision? Copy [`0000-template.md`](0000-template.md).

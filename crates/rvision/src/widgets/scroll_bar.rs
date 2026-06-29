@@ -130,7 +130,7 @@ impl ScrollBar {
     }
 
     /// Maps a `point` along the bar to the scroll position its thumb would sit at —
-    /// the inverse of [`thumb_offset`](Self::thumb_offset), for dragging the thumb.
+    /// the inverse of `thumb_offset`, for dragging the thumb.
     /// Result is in `0..=total - visible`; points on or before the start arrow map
     /// to `0`, on or after the end arrow to the maximum.
     pub fn pos_at(&self, point: Point) -> usize {

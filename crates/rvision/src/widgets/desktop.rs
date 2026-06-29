@@ -59,6 +59,11 @@ impl View for Desktop {
         let area = canvas.bounds();
         canvas.fill(area, &self.backdrop);
         for window in &self.windows {
+            // The window casts its drop shadow on the backdrop (or a lower
+            // window) before it is drawn on top of that shadow (ADR 0020).
+            if let Some(style) = window.drop_shadow() {
+                canvas.shadow(window.bounds(), style);
+            }
             let mut sub = canvas.child(window.bounds());
             window.draw(&mut sub);
         }
@@ -109,7 +114,7 @@ mod tests {
     use crate::command::{CM_OK, Command, CommandSet};
     use crate::event::{KeyCode, KeyEvent, Modifiers, MouseButton, MouseKind};
     use crate::geometry::{Point, Size};
-    use crate::theme::Theme;
+    use crate::theme::{Role, Theme};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -161,6 +166,29 @@ mod tests {
         let mut canvas = Canvas::new(&mut buf);
         desk.draw(&mut canvas);
         assert_eq!(buf.to_text(), "░░░\n░░░");
+    }
+
+    #[test]
+    fn a_window_casts_its_drop_shadow_on_the_backdrop() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let shadow = Theme::default().style(Role::Shadow);
+        // An 8×4 window at (2, 1), clear of the surface edges so its whole shadow
+        // lands on the backdrop: the right strip starts at x = 10 (ADR 0020).
+        let desk = Desktop::new(
+            rect(0, 0, 20, 10),
+            Cell::from_char('░', Style::new()),
+            vec![window(1, rect(2, 1, 8, 4), &log)],
+        );
+        let mut buf = Buffer::new(Size::new(20, 10));
+        let mut canvas = Canvas::new(&mut buf);
+        desk.draw(&mut canvas);
+
+        // The shadow keeps the backdrop glyph but is repainted in the shadow style.
+        let shadowed = buf.get(Point::new(10, 2)).unwrap();
+        assert_eq!(shadowed.grapheme().to_string(), "░");
+        assert_eq!(shadowed.style(), shadow);
+        // Backdrop clear of the window and its shadow is left alone.
+        assert_eq!(buf.get(Point::new(0, 9)).unwrap().style(), Style::new());
     }
 
     #[test]
