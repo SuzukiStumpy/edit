@@ -5,7 +5,7 @@ use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{CM_CANCEL, CM_OK, Command};
-use rvision::event::{Event, EventResult, KeyCode};
+use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, Modal, View};
@@ -117,6 +117,36 @@ impl FindDialog {
             Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
         )
     }
+
+    /// Routes a left-press (in dialog-local coordinates) to the control under the
+    /// pointer, focusing it first. Control bounds are interior-local, so the pointer
+    /// is shifted by the interior origin and then into the control's own coordinates.
+    fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
+        if !matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
+            return EventResult::Ignored;
+        }
+        let io = self.interior().origin();
+        let p = m.pos.offset(-io.x, -io.y);
+        let bounds = [
+            self.input.bounds(),
+            self.case.bounds(),
+            self.word.bounds(),
+            self.back.bounds(),
+            self.find.bounds(),
+            self.cancel.bounds(),
+        ];
+        let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
+            return EventResult::Ignored;
+        };
+        self.focus = i;
+        self.apply_focus();
+        let b = bounds[i];
+        let local = Event::Mouse(MouseEvent {
+            pos: p.offset(-b.origin().x, -b.origin().y),
+            ..*m
+        });
+        self.route(&local, ctx)
+    }
 }
 
 fn rect(x: i16, y: i16, w: i16, h: i16) -> Rect {
@@ -156,8 +186,10 @@ impl View for FindDialog {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        let Event::Key(key) = event else {
-            return EventResult::Ignored; // mouse is Phase 9
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Mouse(m) => return self.handle_mouse(m, ctx),
+            _ => return EventResult::Ignored,
         };
         match key.code {
             KeyCode::Esc => {
@@ -213,6 +245,22 @@ mod tests {
         for c in s.chars() {
             press(d, KeyCode::Char(c));
         }
+    }
+
+    #[test]
+    fn clicking_a_control_focuses_it() {
+        let mut d = dialog();
+        assert_eq!(d.focus, FOCUS_INPUT);
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // The "Case sensitive" box is at interior-local (0, 3) → dialog-local (1, 4).
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(3, 4),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(d.handle_event(&click, &mut ctx), EventResult::Consumed);
+        assert_eq!(d.focus, FOCUS_CASE);
     }
 
     #[test]

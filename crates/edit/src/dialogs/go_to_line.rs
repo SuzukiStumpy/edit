@@ -4,7 +4,7 @@ use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{CM_CANCEL, CM_OK, Command};
-use rvision::event::{Event, EventResult, KeyCode};
+use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, Modal, View};
@@ -85,6 +85,34 @@ impl GoToLine {
             Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
         )
     }
+
+    /// Routes a mouse event (in dialog-local coordinates) to the control under the
+    /// pointer, focusing it on a press, mirroring the key dispatch in `handle_event`.
+    /// Control bounds are interior-local, so the pointer is shifted by the interior
+    /// origin first, then into the control's own coordinates.
+    fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
+        let io = self.interior().origin();
+        let p = m.pos.offset(-io.x, -io.y);
+        let bounds = [self.input.bounds(), self.ok.bounds(), self.cancel.bounds()];
+        let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
+            return EventResult::Ignored;
+        };
+        if matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
+            self.focus = i;
+            self.apply_focus();
+        }
+        let b = bounds[i];
+        let local = Event::Mouse(MouseEvent {
+            pos: p.offset(-b.origin().x, -b.origin().y),
+            ..*m
+        });
+        match i {
+            FOCUS_INPUT => self.input.handle_event(&local, ctx),
+            FOCUS_OK => self.ok.handle_event(&local, ctx),
+            FOCUS_CANCEL => self.cancel.handle_event(&local, ctx),
+            _ => EventResult::Ignored,
+        }
+    }
 }
 
 fn rect(x: i16, y: i16, w: i16, h: i16) -> Rect {
@@ -117,8 +145,10 @@ impl View for GoToLine {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        let Event::Key(key) = event else {
-            return EventResult::Ignored; // mouse is Phase 9
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Mouse(m) => return self.handle_mouse(m, ctx),
+            _ => return EventResult::Ignored,
         };
         match key.code {
             KeyCode::Esc => {
@@ -218,6 +248,38 @@ mod tests {
         assert_eq!(posted, vec![Event::Command(CM_CANCEL)]);
         press(&mut d, KeyCode::Tab);
         assert_eq!(d.focus, FOCUS_INPUT, "wraps");
+    }
+
+    fn click(d: &mut GoToLine, x: i16, y: i16) -> (EventResult, Vec<Event>) {
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = d.handle_event(
+            &Event::Mouse(MouseEvent {
+                kind: MouseKind::Down(MouseButton::Left),
+                pos: Point::new(x, y),
+                modifiers: Modifiers::NONE,
+            }),
+            &mut ctx,
+        );
+        (r, ctx.take_posted())
+    }
+
+    #[test]
+    fn clicking_the_ok_button_focuses_it_and_posts_ok() {
+        let mut d = dialog();
+        // OK sits at interior-local (16, 6) → dialog-local (17, 7).
+        let (r, posted) = click(&mut d, 18, 7);
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(d.focus, FOCUS_OK);
+        assert_eq!(posted, vec![Event::Command(CM_OK)]);
+    }
+
+    #[test]
+    fn clicking_cancel_posts_cancel() {
+        let mut d = dialog();
+        let (_, posted) = click(&mut d, 30, 7); // the Cancel button
+        assert_eq!(d.focus, FOCUS_CANCEL);
+        assert_eq!(posted, vec![Event::Command(CM_CANCEL)]);
     }
 
     #[test]

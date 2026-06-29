@@ -343,9 +343,14 @@ interaction, window move/resize by drag, drag-select in the editor.
     `set_focus`); `Button` activates on a click, `CheckBox` toggles, and
     `RadioButtons` selects the clicked row. `exec_view` already delivers mouse to
     a modal in dialog-local coordinates, so these work in any `Dialog`.
-  - **9e.2** Text + list controls — `InputLine` click-to-place-caret, `ListBox`/
-    `ListViewer` click-to-select + wheel/scroll-bar; the editor's own modal
-    dialogs (`GoToLine`/`Find`/`Replace`) route mouse to their controls.
+  - **9e.2 ✅** Text + list controls — `InputLine` places the caret under a click
+    (`grapheme_at` inverts the display mapping); `ListBox` selects the clicked row
+    and scrolls via its scroll bar / the wheel (reusing `ScrollBar::hit`). The
+    editor's bespoke modals (`GoToLine`/`Find`/`Replace`) and `rvision`'s
+    `FileDialog` — which hand-route rather than wrap a `Group` — gained a
+    `handle_mouse` that translates into interior/control coordinates, focuses the
+    hit control, and delivers; `Dialog`/`MessageBox` already forward mouse to their
+    inner `Group`, so they were covered by 9e.1.
 
 ---
 

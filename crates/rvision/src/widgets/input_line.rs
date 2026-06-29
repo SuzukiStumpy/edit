@@ -10,7 +10,7 @@
 use crate::canvas::Canvas;
 use crate::cell::{Cell, Grapheme};
 use crate::color::{Attributes, Style};
-use crate::event::{Event, EventResult, KeyCode, Modifiers};
+use crate::event::{Event, EventResult, KeyCode, Modifiers, MouseButton, MouseKind};
 use crate::geometry::{Point, Rect};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, View};
@@ -86,6 +86,19 @@ impl InputLine {
             .iter()
             .position(|&s| s >= byte)
             .unwrap_or_else(|| self.len())
+    }
+
+    /// The grapheme index under local display column `x` — the inverse of the
+    /// caret placement in [`draw`](View::draw), so a click lands on the grapheme it
+    /// points at (clamped to `len` past the value's end).
+    fn grapheme_at(&self, x: i16) -> usize {
+        let graphemes: Vec<&str> = self.text.graphemes(true).collect();
+        let target = col_of(&graphemes, self.scroll) + x.max(0);
+        let mut idx = self.scroll;
+        while idx < graphemes.len() && col_of(&graphemes, idx + 1) <= target {
+            idx += 1;
+        }
+        idx
     }
 
     /// Inserts `c` at the cursor, advancing past whatever grapheme now sits there
@@ -187,6 +200,16 @@ impl View for InputLine {
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &mut Context) -> EventResult {
+        // A click places the caret under the pointer (the group focuses the field
+        // first), regardless of the prior focus.
+        if let Event::Mouse(m) = event {
+            if matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
+                self.cursor = self.grapheme_at(m.pos.x);
+                self.ensure_visible();
+                return EventResult::Consumed;
+            }
+            return EventResult::Ignored;
+        }
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
@@ -268,6 +291,30 @@ mod tests {
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
         input.handle_event(&Event::Key(KeyEvent::new(code, Modifiers::NONE)), &mut ctx)
+    }
+
+    fn click(input: &mut InputLine, x: i16) -> EventResult {
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        input.handle_event(
+            &Event::Mouse(crate::event::MouseEvent {
+                kind: MouseKind::Down(MouseButton::Left),
+                pos: Point::new(x, 0),
+                modifiers: Modifiers::NONE,
+            }),
+            &mut ctx,
+        )
+    }
+
+    #[test]
+    fn clicking_places_the_caret_at_that_column() {
+        let mut input = focused(10);
+        type_str(&mut input, "hello"); // caret at end (5)
+        assert_eq!(click(&mut input, 2), EventResult::Consumed);
+        assert_eq!(input.cursor(), 2);
+        // A click past the value's end clamps to its end.
+        click(&mut input, 9);
+        assert_eq!(input.cursor(), 5);
     }
 
     fn type_str(input: &mut InputLine, s: &str) {

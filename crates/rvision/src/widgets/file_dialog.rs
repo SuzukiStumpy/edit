@@ -17,7 +17,7 @@ use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
 use crate::command::{CM_CANCEL, CM_OK, Command};
-use crate::event::{Event, EventResult, KeyCode, KeyEvent};
+use crate::event::{Event, EventResult, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, Modal, View};
@@ -213,6 +213,45 @@ impl FileDialog {
             Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
         )
     }
+
+    /// Routes a mouse event (in dialog-local coordinates) to the control under the
+    /// pointer, focusing it on a left-press. Control bounds are interior-local, so
+    /// the pointer is shifted by the interior origin, then into the control's own
+    /// coordinates. Clicking the list mirrors arrow navigation by syncing the name
+    /// field to the new selection.
+    fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
+        let io = self.interior().origin();
+        let p = m.pos.offset(-io.x, -io.y);
+        let bounds = [
+            self.list.bounds(),
+            self.input.bounds(),
+            self.open.bounds(),
+            self.cancel.bounds(),
+        ];
+        let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
+            return EventResult::Ignored;
+        };
+        if matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
+            self.focus = i;
+            self.apply_focus();
+        }
+        let b = bounds[i];
+        let local = Event::Mouse(MouseEvent {
+            pos: p.offset(-b.origin().x, -b.origin().y),
+            ..*m
+        });
+        match i {
+            FOCUS_LIST => {
+                let result = self.list.handle_event(&local, ctx);
+                self.sync_input_from_list();
+                result
+            }
+            FOCUS_INPUT => self.input.handle_event(&local, ctx),
+            FOCUS_OPEN => self.open.handle_event(&local, ctx),
+            FOCUS_CANCEL => self.cancel.handle_event(&local, ctx),
+            _ => EventResult::Ignored,
+        }
+    }
 }
 
 /// How an entry shows in the list: `..`, a directory `name/`, or a file `name`.
@@ -287,8 +326,10 @@ impl View for FileDialog {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        let Event::Key(key) = event else {
-            return EventResult::Ignored; // mouse is Phase 9
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Mouse(m) => return self.handle_mouse(m, ctx),
+            _ => return EventResult::Ignored,
         };
         match key.code {
             KeyCode::Esc => {
@@ -377,6 +418,23 @@ mod tests {
         assert_eq!(names(&d), vec!["..", "sub", "a.txt", "b.txt"]);
         assert!(d.entries[1].is_dir, "sub is a directory");
         assert!(!d.entries[2].is_dir, "a.txt is a file");
+    }
+
+    #[test]
+    fn clicking_a_file_in_the_list_selects_it_and_fills_the_name() {
+        let mut d = dialog(); // entries: .., sub, a.txt, b.txt
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // The list starts at dialog-local (1, 5); "a.txt" is its row 2 → y = 7.
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(3, 7),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(d.handle_event(&click, &mut ctx), EventResult::Consumed);
+        assert_eq!(d.focus, FOCUS_LIST);
+        assert_eq!(d.list.selected(), Some(2));
+        assert_eq!(d.input.text(), "a.txt", "the name field follows the click");
     }
 
     #[test]

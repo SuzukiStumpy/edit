@@ -10,12 +10,12 @@
 use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
-use crate::event::{Event, EventResult, KeyCode};
+use crate::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, View};
 
-use super::ScrollBar;
+use super::{ScrollBar, ScrollPart};
 
 /// A scrollable list with one selected row.
 pub struct ListBox {
@@ -84,6 +84,59 @@ impl ListBox {
             }
         }
     }
+
+    /// Scrolls the view by `delta` rows (negative = up) **without** moving the
+    /// selection — the wheel and scroll bar pan the list. Clamped so the last
+    /// screenful never scrolls off the bottom.
+    fn scroll_by(&mut self, delta: isize) {
+        let max_top = self.items.len().saturating_sub(self.rows()) as isize;
+        self.top = ((self.top as isize) + delta).clamp(0, max_top) as usize;
+    }
+
+    /// Handles a mouse event (in the list's local coordinates): a click selects the
+    /// row under the pointer, or — on the scroll bar — scrolls; the wheel pans the
+    /// view a row at a time.
+    fn handle_mouse(&mut self, m: &MouseEvent) -> EventResult {
+        let rows = self.rows();
+        let width = self.bounds.width();
+        let has_bar = self.items.len() > rows && width > 1;
+        match m.kind {
+            MouseKind::Down(MouseButton::Left) => {
+                if has_bar && m.pos.x == width - 1 {
+                    let mut bar = ScrollBar::new(
+                        Rect::from_origin_size(Point::new(width - 1, 0), Size::new(1, rows as i16)),
+                        self.style,
+                    );
+                    bar.set_metrics(self.items.len(), rows, self.top);
+                    if let Some(part) = bar.hit(m.pos) {
+                        let page = rows.max(1) as isize;
+                        match part {
+                            ScrollPart::LineUp => self.scroll_by(-1),
+                            ScrollPart::LineDown => self.scroll_by(1),
+                            ScrollPart::PageUp => self.scroll_by(-page),
+                            ScrollPart::PageDown => self.scroll_by(page),
+                            ScrollPart::Thumb => {}
+                        }
+                    }
+                } else if m.pos.y >= 0 {
+                    let idx = self.top + m.pos.y as usize;
+                    if idx < self.items.len() {
+                        self.selected = Some(idx);
+                    }
+                }
+                EventResult::Consumed
+            }
+            MouseKind::ScrollDown => {
+                self.scroll_by(1);
+                EventResult::Consumed
+            }
+            MouseKind::ScrollUp => {
+                self.scroll_by(-1);
+                EventResult::Consumed
+            }
+            _ => EventResult::Ignored,
+        }
+    }
 }
 
 impl View for ListBox {
@@ -142,6 +195,9 @@ impl View for ListBox {
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &mut Context) -> EventResult {
+        if let Event::Mouse(m) = event {
+            return self.handle_mouse(m);
+        }
         if let Event::Key(key) = event {
             if self.focused {
                 let page = self.rows().max(1) as isize;
@@ -211,6 +267,57 @@ mod tests {
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
         lb.handle_event(&Event::Key(KeyEvent::new(code, Modifiers::NONE)), &mut ctx)
+    }
+
+    fn mouse(lb: &mut ListBox, kind: MouseKind, x: i16, y: i16) -> EventResult {
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        lb.handle_event(
+            &Event::Mouse(MouseEvent {
+                kind,
+                pos: Point::new(x, y),
+                modifiers: Modifiers::NONE,
+            }),
+            &mut ctx,
+        )
+    }
+
+    #[test]
+    fn clicking_a_row_selects_that_item() {
+        let mut lb = list(10, 4, &["a", "b", "c", "d"]);
+        mouse(&mut lb, MouseKind::Down(MouseButton::Left), 2, 2);
+        assert_eq!(lb.selected(), Some(2));
+        assert_eq!(lb.selected_text(), Some("c"));
+    }
+
+    #[test]
+    fn clicking_below_the_last_item_does_nothing() {
+        let mut lb = list(10, 6, &["a", "b"]);
+        mouse(&mut lb, MouseKind::Down(MouseButton::Left), 0, 4); // blank row
+        assert_eq!(lb.selected(), Some(0), "selection unchanged");
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_list_without_moving_the_selection() {
+        let mut lb = list(10, 3, &["a", "b", "c", "d", "e", "f"]);
+        assert_eq!(lb.top, 0);
+        mouse(&mut lb, MouseKind::ScrollDown, 5, 1);
+        assert_eq!(lb.top, 1);
+        assert_eq!(
+            lb.selected(),
+            Some(0),
+            "the wheel does not move the selection"
+        );
+    }
+
+    #[test]
+    fn clicking_the_scroll_bar_down_arrow_scrolls() {
+        // 6 items, 3 rows → a scroll bar is drawn at column 9 (width - 1).
+        let mut lb = list(10, 3, &["a", "b", "c", "d", "e", "f"]);
+        assert_eq!(lb.top, 0);
+        mouse(&mut lb, MouseKind::Down(MouseButton::Left), 9, 2); // the ▼ at the bar's foot
+        assert_eq!(lb.top, 1);
+        assert_eq!(lb.selected(), Some(0), "scrolling leaves the selection");
     }
 
     fn render(lb: &ListBox, w: i16, h: i16) -> String {

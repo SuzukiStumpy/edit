@@ -7,7 +7,7 @@ use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{CM_CANCEL, CM_OK, Command};
-use rvision::event::{Event, EventResult, KeyCode};
+use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, Modal, View};
@@ -120,6 +120,36 @@ impl ReplaceDialog {
             Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
         )
     }
+
+    /// Routes a left-press (in dialog-local coordinates) to the control under the
+    /// pointer, focusing it first. Control bounds are interior-local, so the pointer
+    /// is shifted by the interior origin and then into the control's own coordinates.
+    fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
+        if !matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
+            return EventResult::Ignored;
+        }
+        let io = self.interior().origin();
+        let p = m.pos.offset(-io.x, -io.y);
+        let bounds = [
+            self.find.bounds(),
+            self.replace.bounds(),
+            self.case.bounds(),
+            self.word.bounds(),
+            self.all.bounds(),
+            self.cancel.bounds(),
+        ];
+        let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
+            return EventResult::Ignored;
+        };
+        self.focus = i;
+        self.apply_focus();
+        let b = bounds[i];
+        let local = Event::Mouse(MouseEvent {
+            pos: p.offset(-b.origin().x, -b.origin().y),
+            ..*m
+        });
+        self.route(&local, ctx)
+    }
 }
 
 fn rect(x: i16, y: i16, w: i16, h: i16) -> Rect {
@@ -160,8 +190,10 @@ impl View for ReplaceDialog {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        let Event::Key(key) = event else {
-            return EventResult::Ignored; // mouse is Phase 9
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Mouse(m) => return self.handle_mouse(m, ctx),
+            _ => return EventResult::Ignored,
         };
         match key.code {
             KeyCode::Esc => {
@@ -217,6 +249,22 @@ mod tests {
         for c in s.chars() {
             press(d, KeyCode::Char(c));
         }
+    }
+
+    #[test]
+    fn clicking_the_replace_field_focuses_it() {
+        let mut d = dialog();
+        assert_eq!(d.focus, FOCUS_FIND);
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // The "Replace with" field is at interior-local (0, 4) → dialog-local (1, 5).
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(3, 5),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(d.handle_event(&click, &mut ctx), EventResult::Consumed);
+        assert_eq!(d.focus, FOCUS_REPLACE);
     }
 
     #[test]
