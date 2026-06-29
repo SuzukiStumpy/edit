@@ -92,19 +92,16 @@ impl Document {
         self.editor.is_modified()
     }
 
-    /// The window title: the file name (or `Untitled`), with a `*` when modified.
-    fn title(&self) -> String {
-        let name = match &self.path {
+    /// The window's base name — the file name, or `Untitled` for an unsaved
+    /// document. The `*` modified marker and any ` (n)` instance indicator for
+    /// duplicate names are added by [`EditorApp::window_title`].
+    fn base_name(&self) -> String {
+        match &self.path {
             Some(p) => p
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| p.to_string_lossy().into_owned()),
             None => "Untitled".to_string(),
-        };
-        if self.is_modified() {
-            format!("{name} *")
-        } else {
-            name
         }
     }
 
@@ -375,9 +372,28 @@ impl EditorApp {
         self.doc().path.as_deref()
     }
 
-    /// The active document's window title (file name or `Untitled`, `*` if dirty).
+    /// The active window's title (with any instance indicator and modified `*`).
     fn title(&self) -> String {
-        self.doc().title()
+        self.window_title(self.active)
+    }
+
+    /// The title for window `i`: its base name, plus a ` (n)` instance indicator
+    /// when more than one window shares that base name (numbered in window order),
+    /// plus a trailing `*` when the document is modified.
+    fn window_title(&self, i: usize) -> String {
+        let base = self.documents[i].base_name();
+        let same: Vec<usize> = (0..self.documents.len())
+            .filter(|&j| self.documents[j].base_name() == base)
+            .collect();
+        let mut title = base;
+        if same.len() > 1 {
+            let ordinal = same.iter().position(|&j| j == i).unwrap() + 1;
+            title.push_str(&format!(" ({ordinal})"));
+        }
+        if self.documents[i].is_modified() {
+            title.push_str(" *");
+        }
+        title
     }
 
     /// The directory a file dialog should start in: the active file's folder, or
@@ -688,7 +704,7 @@ impl EditorApp {
         let doc = &self.documents[i];
         let mut win = desk.child(local);
         let area = win.bounds();
-        Frame::new(&doc.title(), self.frame_style, self.title_style)
+        Frame::new(&self.window_title(i), self.frame_style, self.title_style)
             .active(i == self.active)
             .draw(&mut win);
         let interior = inset1(area);
@@ -1437,6 +1453,46 @@ mod tests {
         keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File
         keydown(&mut ed, KeyCode::F(6), Modifiers::NONE); // should be swallowed by the menu
         assert_eq!(ed.active_index(), 1, "F6 never reached window switching");
+    }
+
+    // --- MDI: window titles / instance indicators ---
+
+    #[test]
+    fn a_lone_window_keeps_its_plain_title() {
+        let ed = app();
+        assert_eq!(ed.window_title(0), "Untitled");
+    }
+
+    #[test]
+    fn windows_sharing_a_title_get_instance_indicators() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        ed.new_window(&THEME()); // three Untitled
+        assert_eq!(ed.window_title(0), "Untitled (1)");
+        assert_eq!(ed.window_title(1), "Untitled (2)");
+        assert_eq!(ed.window_title(2), "Untitled (3)");
+    }
+
+    #[test]
+    fn distinct_names_are_not_numbered() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        ed.documents[0].path = Some(PathBuf::from("/x/a.txt"));
+        assert_eq!(
+            ed.window_title(0),
+            "a.txt",
+            "unique name needs no indicator"
+        );
+        assert_eq!(ed.window_title(1), "Untitled");
+    }
+
+    #[test]
+    fn the_instance_indicator_precedes_the_modified_star() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        type_chars(&mut ed, "x"); // modifies the active window (index 1)
+        assert_eq!(ed.window_title(0), "Untitled (1)");
+        assert_eq!(ed.window_title(1), "Untitled (2) *");
     }
 
     // --- MDI: layout — zoom / cascade / tile (Phase 8b) ---

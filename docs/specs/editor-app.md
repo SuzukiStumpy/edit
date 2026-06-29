@@ -97,7 +97,10 @@ pub fn run<T: Backend + EventSource>(app: Application<T>, ed: EditorApp, theme: 
   acts on them — Copy reads `selected_text`, Cut `take_selection`, Paste
   `insert_text`. It needs no terminal, so the driver runs it before the file
   commands and it is unit-tested headlessly.
-- The title shows the file name (or `Untitled`) with a `*` when modified.
+- The title shows the file name (or `Untitled`) with a `*` when modified. When
+  several windows share a base name, `window_title` appends a ` (n)` instance
+  indicator (numbered in window order) so duplicates — e.g. `Untitled (1)`,
+  `Untitled (2)` — are distinguishable.
 
 ## Collaborators
 
