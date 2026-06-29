@@ -15,4 +15,5 @@
 pub mod app;
 pub mod editor;
 pub mod file;
+mod history;
 pub mod text;

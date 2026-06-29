@@ -1,9 +1,10 @@
 # Module spec: `edit::editor`
 
 - **Status:** Done
-- **Phase:** 6 (editor, single document) — sub-phase 6a; clipboard primitives 7a
+- **Phase:** 6 (editor) — 6a; clipboard 7a; undo/redo 7b
 - **Related ADRs:** 0006 (full Unicode), 0008 (line-array text), 0011 (reversible
-  edits), 0015 (canvas), 0017 (focus-in-draw push), 0019 (app-owned clipboard)
+  edits + journal), 0015 (canvas), 0017 (focus-in-draw push), 0019 (app-owned
+  clipboard)
 
 ## Purpose
 
@@ -33,6 +34,10 @@ impl EditorView {
     pub fn selected_text(&self) -> Option<String>;         // Copy reads this
     pub fn take_selection(&mut self) -> Option<String>;    // Cut: return + delete
     pub fn insert_text(&mut self, text: &str);             // Paste: multi-line insert
+    pub fn undo(&mut self) -> bool;                        // reverse the last action
+    pub fn redo(&mut self) -> bool;                        // re-apply it
+    pub fn can_undo(&self) -> bool;
+    pub fn can_redo(&self) -> bool;
     pub fn set_bounds(&mut self, bounds: Rect);            // relayout
 }
 
@@ -57,8 +62,17 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   cleared by any horizontal motion or edit.
 - **Editing goes through `Edit`** (insert/delete) applied to the owned doc, never
   ad-hoc string surgery — so every mutation is already invertible (ADR 0011).
-  Each edit sets `modified`, moves the cursor to the edit's far end, clears the
-  selection, and re-scrolls to keep the cursor visible.
+  One `commit(before, edits, after, coalesce)` path applies the edits, moves the
+  cursor to the edit's far end, clears the selection, marks the goal column stale,
+  and journals the action in the [`History`]. The dirty flag is derived from the
+  journal's saved marker (so undo-to-save reads clean), not a standalone `bool`.
+- **Undo/redo are editor-local** (`crate::history`): `undo`/`redo` pop a record and
+  replay its inverses/edits, restoring the caret to the record's `before`/`after`.
+  A run of plain typing — and a run of in-line Backspace/Delete — coalesces into a
+  single undo unit; Enter, paste, cut, replace-selection, and line-joins are each
+  their own unit; any cursor motion (`pre_move`) breaks the run. Ctrl+Z undoes,
+  Ctrl+Y / Ctrl+Shift+Z redo (handled in the editor, not posted as the clipboard
+  is).
 - **An active selection is replaced** by typing/Backspace/Delete (delete the span
   as one `Edit`, then insert). With no selection those keys act at the cursor.
 - **Clipboard keys post, never mutate.** Ctrl+C/X/V (and the classic

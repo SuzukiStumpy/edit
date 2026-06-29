@@ -2,15 +2,18 @@
 //! through a scrolling viewport, turning keystrokes into cursor motion and into
 //! reversible [`Edit`]s (see `docs/specs/editor.md`).
 //!
-//! It is a plain [`View`] — no terminal, no files (load/save is Phase 6b), no undo
-//! stack (Phase 7b). Editing already flows through the reversible [`Edit`] type
-//! (ADR 0011); the journal that makes undo possible comes later. The clipboard
-//! itself lives in the app (ADR 0019): the editor only posts `CM_CUT`/`CM_COPY`/
+//! It is a plain [`View`] — no terminal, no files (load/save is Phase 6b). Editing
+//! flows through the reversible [`Edit`] type (ADR 0011), journalled for undo by an
+//! owned [`History`]: every mutation goes through [`commit`](EditorView::commit),
+//! and [`undo`](EditorView::undo)/[`redo`](EditorView::redo) replay inverses. The
+//! clipboard lives in the app (ADR 0019): the editor only posts `CM_CUT`/`CM_COPY`/
 //! `CM_PASTE` and exposes [`take_selection`](EditorView::take_selection) /
-//! [`insert_text`](EditorView::insert_text) for the app to drive. Display geometry
-//! (tab expansion, wide graphemes) lives in one place, [`line_columns`], so
-//! rendering and vertical cursor motion can never disagree.
+//! [`insert_text`](EditorView::insert_text) for the app to drive; undo/redo, by
+//! contrast, are editor-local and handled here. Display geometry (tab expansion,
+//! wide graphemes) lives in one place, [`line_columns`], so rendering and vertical
+//! cursor motion can never disagree.
 
+use crate::history::{Coalesce, History};
 use crate::text::{Edit, LineArray, Position, TextBuffer, position_after};
 use rvision::canvas::Canvas;
 use rvision::cell::{Cell, Grapheme};
@@ -32,6 +35,11 @@ pub const CM_CUT: Command = Command(CM_USER + 10);
 pub const CM_COPY: Command = Command(CM_USER + 11);
 /// Edit ▸ Paste — insert the clipboard at the caret.
 pub const CM_PASTE: Command = Command(CM_USER + 12);
+/// Edit ▸ Undo — reverse the last action (the editor handles this itself; the
+/// menu posts it for the driver to route back here).
+pub const CM_UNDO: Command = Command(CM_USER + 13);
+/// Edit ▸ Redo — re-apply the last undone action.
+pub const CM_REDO: Command = Command(CM_USER + 14);
 
 /// A scrolling text editor over one owned [`LineArray`] document.
 pub struct EditorView {
@@ -49,8 +57,8 @@ pub struct EditorView {
     goal_col: Option<i16>,
     tab_width: usize,
     focused: bool,
-    /// Whether the document has unsaved changes.
-    modified: bool,
+    /// The undo/redo journal; also the source of truth for the dirty flag.
+    history: History,
     text_style: Style,
     selection_style: Style,
 }
@@ -69,7 +77,7 @@ impl EditorView {
             goal_col: None,
             tab_width: DEFAULT_TAB_WIDTH,
             focused: false,
-            modified: false,
+            history: History::new(),
             text_style: theme.style(Role::EditorText),
             selection_style: theme.style(Role::Selection),
         }
@@ -90,7 +98,7 @@ impl EditorView {
         self.top = 0;
         self.left = 0;
         self.goal_col = None;
-        self.modified = false;
+        self.history = History::new();
     }
 
     /// The whole document as a single `'\n'`-joined string.
@@ -103,14 +111,59 @@ impl EditorView {
         self.cursor
     }
 
-    /// Whether the document has unsaved changes.
+    /// Whether the document has unsaved changes (relative to the last save, even
+    /// across undo/redo — ADR 0011).
     pub fn is_modified(&self) -> bool {
-        self.modified
+        self.history.is_modified()
     }
 
-    /// Clears the dirty flag (call after a successful save).
+    /// Pins the current state as saved (call after a successful save); undoing or
+    /// redoing back to it clears the dirty flag again.
     pub fn mark_saved(&mut self) {
-        self.modified = false;
+        self.history.mark_saved();
+    }
+
+    /// Whether there is an action available to undo.
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    /// Whether there is an action available to redo.
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Reverses the most recent action; returns whether anything was undone.
+    pub fn undo(&mut self) -> bool {
+        let Some(rec) = self.history.take_undo() else {
+            return false;
+        };
+        for edit in rec.edits().iter().rev() {
+            self.doc.apply(&edit.invert());
+        }
+        self.cursor = rec.before();
+        self.anchor = None;
+        self.goal_col = None;
+        self.history.push_redo(rec);
+        self.ensure_visible();
+        true
+    }
+
+    /// Re-applies the most recently undone action; returns whether anything was
+    /// redone.
+    pub fn redo(&mut self) -> bool {
+        let Some(rec) = self.history.take_redo() else {
+            return false;
+        };
+        for edit in rec.edits() {
+            self.doc.apply(edit);
+        }
+        self.cursor = rec.after();
+        self.anchor = None;
+        self.goal_col = None;
+        self.history.push_undo(rec);
+        self.ensure_visible();
+        true
     }
 
     /// The selected text, or `None` if the selection is empty (sets up the Phase 7
@@ -218,9 +271,11 @@ impl EditorView {
 
     // --- cursor motion ---
 
-    /// Common pre-amble for a motion key: extend (or start) the selection when
-    /// Shift is held, otherwise drop it.
+    /// Common pre-amble for a motion key: a cursor move ends the current
+    /// coalescing run (so a new typing burst is a fresh undo unit), then extend (or
+    /// start) the selection when Shift is held, otherwise drop it.
     fn pre_move(&mut self, extend: bool) {
+        self.history.break_run();
         if extend {
             self.anchor.get_or_insert(self.cursor);
         } else {
@@ -331,37 +386,57 @@ impl EditorView {
         }
     }
 
-    // --- editing (all through reversible Edits) ---
+    // --- editing (all through reversible Edits journalled for undo) ---
 
-    /// Applies `edit`, marks the document dirty, and clears the goal column.
-    fn apply(&mut self, edit: &Edit) {
-        self.doc.apply(edit);
-        self.modified = true;
+    /// Applies `edits` in order as one undo unit, moves the caret to `after`, drops
+    /// the selection, marks the goal column stale, and records the action in the
+    /// history (where it may coalesce with the previous one — ADR 0011).
+    fn commit(&mut self, before: Position, edits: Vec<Edit>, after: Position, coalesce: Coalesce) {
+        for edit in &edits {
+            self.doc.apply(edit);
+        }
+        self.cursor = after;
+        self.anchor = None;
         self.goal_col = None;
+        self.history.record(before, edits, after, coalesce);
     }
 
-    /// Deletes the current selection (if any) as one edit, leaving the caret at its
-    /// start. Returns whether anything was deleted.
+    /// The edit that removes the current selection and the position it collapses
+    /// to, or `None` if nothing is selected. Pure — `commit` clears the anchor.
+    fn selection_delete_edit(&self) -> Option<(Edit, Position)> {
+        let (start, end) = self.selection_range()?;
+        let span = self.doc.slice(start, end);
+        Some((Edit::delete(start, span), start))
+    }
+
+    /// Deletes the current selection (if any) as one undo unit, leaving the caret
+    /// at its start. Returns whether anything was deleted.
     fn delete_selection(&mut self) -> bool {
-        let Some((start, end)) = self.selection_range() else {
+        let before = self.cursor;
+        let Some((edit, start)) = self.selection_delete_edit() else {
             self.anchor = None;
             return false;
         };
-        let span = self.doc.slice(start, end);
-        self.apply(&Edit::delete(start, span));
-        self.cursor = start;
-        self.anchor = None;
+        self.commit(before, vec![edit], start, Coalesce::Standalone);
         true
     }
 
-    /// Inserts `text` at the caret as one [`Edit`] (replacing any selection
+    /// Inserts `text` at the caret as one undo unit (replacing any selection
     /// first), leaving the caret at the far end of the inserted text. Used for
     /// Paste; `text` may span lines.
     pub fn insert_text(&mut self, text: &str) {
-        self.delete_selection();
-        let at = self.cursor;
-        self.apply(&Edit::insert(at, text));
-        self.cursor = position_after(at, text);
+        let before = self.cursor;
+        let (mut edits, at) = match self.selection_delete_edit() {
+            Some((edit, start)) => (vec![edit], start),
+            None => (Vec::new(), self.cursor),
+        };
+        edits.push(Edit::insert(at, text));
+        self.commit(
+            before,
+            edits,
+            position_after(at, text),
+            Coalesce::Standalone,
+        );
         self.ensure_visible();
     }
 
@@ -375,58 +450,79 @@ impl EditorView {
         Some(text)
     }
 
-    /// Inserts a single character at the caret (replacing any selection first).
+    /// Inserts a single character at the caret (replacing any selection first). A
+    /// run of plain typing coalesces into one undo unit; replacing a selection is
+    /// its own unit.
     fn insert_char(&mut self, c: char) {
-        self.delete_selection();
-        let at = self.cursor;
-        self.apply(&Edit::insert(at, c.to_string()));
-        self.cursor.column += 1;
+        let before = self.cursor;
+        let (mut edits, at, coalesce) = match self.selection_delete_edit() {
+            Some((edit, start)) => (vec![edit], start, Coalesce::Standalone),
+            None => (Vec::new(), self.cursor, Coalesce::Typing),
+        };
+        edits.push(Edit::insert(at, c.to_string()));
+        let after = Position::new(at.line, at.column + 1);
+        self.commit(before, edits, after, coalesce);
         self.ensure_visible();
     }
 
-    /// Splits the line at the caret (replacing any selection first).
+    /// Splits the line at the caret (replacing any selection first). Enter is
+    /// always its own undo unit.
     fn insert_newline(&mut self) {
-        self.delete_selection();
-        let at = self.cursor;
-        self.apply(&Edit::insert(at, "\n"));
-        self.cursor = Position::new(at.line + 1, 0);
+        let before = self.cursor;
+        let (mut edits, at) = match self.selection_delete_edit() {
+            Some((edit, start)) => (vec![edit], start),
+            None => (Vec::new(), self.cursor),
+        };
+        edits.push(Edit::insert(at, "\n"));
+        let after = Position::new(at.line + 1, 0);
+        self.commit(before, edits, after, Coalesce::Standalone);
         self.ensure_visible();
     }
 
     /// Backspace: delete the selection, else the grapheme before the caret,
-    /// joining the previous line at column 0.
+    /// joining the previous line at column 0. In-line deletes coalesce into a run.
     fn backspace(&mut self) {
         if self.delete_selection() {
             self.ensure_visible();
             return;
         }
+        let before = self.cursor;
         if self.cursor.column > 0 {
             let from = Position::new(self.cursor.line, self.cursor.column - 1);
             let span = self.doc.slice(from, self.cursor);
-            self.apply(&Edit::delete(from, span));
-            self.cursor = from;
+            self.commit(
+                before,
+                vec![Edit::delete(from, span)],
+                from,
+                Coalesce::Deleting,
+            );
         } else if self.cursor.line > 0 {
             let prev = self.cursor.line - 1;
             let join = Position::new(prev, self.line_len(prev));
-            self.apply(&Edit::delete(join, "\n"));
-            self.cursor = join;
+            self.commit(
+                before,
+                vec![Edit::delete(join, "\n")],
+                join,
+                Coalesce::Standalone,
+            );
         }
         self.ensure_visible();
     }
 
     /// Delete: remove the selection, else the grapheme at the caret, joining the
-    /// next line at end-of-line.
+    /// next line at end-of-line. In-line deletes coalesce into a run.
     fn delete_forward(&mut self) {
         if self.delete_selection() {
             self.ensure_visible();
             return;
         }
+        let at = self.cursor;
         if self.cursor.column < self.line_len(self.cursor.line) {
             let to = Position::new(self.cursor.line, self.cursor.column + 1);
             let span = self.doc.slice(self.cursor, to);
-            self.apply(&Edit::delete(self.cursor, span));
+            self.commit(at, vec![Edit::delete(at, span)], at, Coalesce::Deleting);
         } else if self.cursor.line + 1 < self.doc.line_count() {
-            self.apply(&Edit::delete(self.cursor, "\n"));
+            self.commit(at, vec![Edit::delete(at, "\n")], at, Coalesce::Standalone);
         }
         self.ensure_visible();
     }
@@ -635,6 +731,20 @@ impl View for EditorView {
             _ => {}
         }
         match key.code {
+            // Undo/redo are editor-local (the journal lives here), so unlike the
+            // clipboard the editor acts on them directly rather than posting.
+            KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => {
+                self.redo();
+                EventResult::Consumed
+            }
+            KeyCode::Char('z' | 'Z') if ctrl && !alt => {
+                self.undo();
+                EventResult::Consumed
+            }
+            KeyCode::Char('y' | 'Y') if ctrl && !alt => {
+                self.redo();
+                EventResult::Consumed
+            }
             KeyCode::Char(c) if !c.is_control() && !ctrl && !alt => {
                 self.insert_char(c);
                 EventResult::Consumed
@@ -944,6 +1054,114 @@ mod tests {
         // With nothing selected it takes nothing and leaves the document alone.
         assert_eq!(e.take_selection(), None);
         assert_eq!(e.text(), "lo");
+    }
+
+    // --- undo / redo (the journal; ADR 0011, 7b) ---
+
+    #[test]
+    fn undo_then_redo_round_trips_a_typing_run() {
+        let mut e = editor(20, 5);
+        type_str(&mut e, "hello"); // one coalesced undo unit
+        assert!(e.can_undo() && !e.can_redo());
+        assert!(e.undo());
+        assert_eq!(e.text(), "", "the whole run undoes at once");
+        assert_eq!(e.cursor(), Position::new(0, 0));
+        assert!(e.redo());
+        assert_eq!(e.text(), "hello");
+        assert_eq!(e.cursor(), Position::new(0, 5));
+        assert!(!e.redo(), "nothing left to redo");
+    }
+
+    #[test]
+    fn a_cursor_move_splits_typing_into_separate_undo_units() {
+        let mut e = editor(20, 5);
+        type_str(&mut e, "ab");
+        key(&mut e, KeyCode::Left); // breaks the run
+        type_str(&mut e, "c"); // inserted at column 1
+        assert_eq!(e.text(), "acb");
+        e.undo();
+        assert_eq!(e.text(), "ab", "only the post-move keystroke undoes first");
+        e.undo();
+        assert_eq!(e.text(), "");
+    }
+
+    #[test]
+    fn a_backspace_run_undoes_as_one_unit_restoring_the_caret() {
+        let mut e = editor(20, 5).clone_doc("abcd");
+        key(&mut e, KeyCode::End); // caret at (0, 4)
+        key(&mut e, KeyCode::Backspace);
+        key(&mut e, KeyCode::Backspace); // "ab"
+        assert_eq!(e.text(), "ab");
+        assert!(e.undo());
+        assert_eq!(e.text(), "abcd", "both deletes restore together");
+        assert_eq!(
+            e.cursor(),
+            Position::new(0, 4),
+            "caret back where the run began"
+        );
+    }
+
+    #[test]
+    fn a_multiline_paste_is_one_undo_unit() {
+        let mut e = editor(20, 5);
+        e.insert_text("one\ntwo");
+        assert_eq!(e.text(), "one\ntwo");
+        assert!(e.undo());
+        assert_eq!(e.text(), "");
+    }
+
+    #[test]
+    fn typing_over_a_selection_undoes_to_the_original_text() {
+        let mut e = editor(20, 5).clone_doc("hello world");
+        for _ in 0..5 {
+            press(&mut e, KeyCode::Right, Modifiers::SHIFT); // select "hello"
+        }
+        type_str(&mut e, "X"); // replace-selection: one Standalone unit
+        assert_eq!(e.text(), "X world");
+        e.undo();
+        assert_eq!(e.text(), "hello world");
+    }
+
+    #[test]
+    fn a_new_edit_after_undo_discards_the_redo_branch() {
+        let mut e = editor(20, 5);
+        type_str(&mut e, "ab");
+        e.undo();
+        assert!(e.can_redo());
+        type_str(&mut e, "z");
+        assert!(!e.can_redo(), "diverging from the undone state drops redo");
+        assert_eq!(e.text(), "z");
+    }
+
+    #[test]
+    fn undoing_past_the_save_point_re_marks_modified() {
+        let mut e = editor(20, 5);
+        type_str(&mut e, "x");
+        assert!(e.is_modified());
+        e.mark_saved();
+        assert!(!e.is_modified());
+        e.undo();
+        assert!(e.is_modified(), "undone past the save => dirty");
+        e.redo();
+        assert!(!e.is_modified(), "redone back to the save => clean");
+    }
+
+    #[test]
+    fn ctrl_z_and_ctrl_y_drive_undo_and_redo() {
+        let mut e = editor(20, 5);
+        type_str(&mut e, "hi");
+        press(&mut e, KeyCode::Char('z'), Modifiers::CONTROL);
+        assert_eq!(e.text(), "");
+        press(&mut e, KeyCode::Char('y'), Modifiers::CONTROL);
+        assert_eq!(e.text(), "hi");
+        // Ctrl+Shift+Z also redoes (after an undo).
+        press(&mut e, KeyCode::Char('z'), Modifiers::CONTROL);
+        press(
+            &mut e,
+            KeyCode::Char('z'),
+            Modifiers::CONTROL | Modifiers::SHIFT,
+        );
+        assert_eq!(e.text(), "hi");
     }
 
     #[test]

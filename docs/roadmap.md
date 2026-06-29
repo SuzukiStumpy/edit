@@ -251,8 +251,10 @@ single-document editor with menus, a status line, and modal Open/Save dialogs.
 - **7a ✅ Selection + clipboard** — selection rendered in Phase 6; Cut/Copy/Paste
   now wired through an app-owned internal clipboard the editor reaches by posting
   commands (ADR 0019). OSC 52 system clipboard is still Phase 10.
-- **7b Undo/redo** — wire the reversible-edit journal into undo/redo stacks;
-  coalesce consecutive typing into sensible undo units (ADR 0011).
+- **7b ✅ Undo/redo** — the reversible-edit journal (`edit::history`) wired into
+  undo/redo stacks; runs of typing and of in-line deletes coalesce into single
+  undo units, cursor moves break the run, and an identity-based saved marker drives
+  the dirty flag across undo/redo (ADR 0011).
 - **7c Find / Replace** (dialogs + buffer search + repeat-last) **and Go to line.**
 
 ---

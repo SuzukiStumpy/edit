@@ -27,7 +27,7 @@ use rvision::widgets::{
     FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, ScrollBar, StatusItem, StatusLine,
 };
 
-use crate::editor::{CM_COPY, CM_CUT, CM_PASTE, EditorView};
+use crate::editor::{CM_COPY, CM_CUT, CM_PASTE, CM_REDO, CM_UNDO, EditorView};
 use crate::file::{self, Encoding};
 
 /// File ▸ New.
@@ -104,6 +104,8 @@ impl EditorApp {
                 Menu::new(
                     "Edit",
                     vec![
+                        MenuItem::new("Undo", CM_UNDO).with_shortcut("Ctrl-Z"),
+                        MenuItem::new("Redo", CM_REDO).with_shortcut("Ctrl-Y"),
                         MenuItem::new("Cut", CM_CUT).with_shortcut("Ctrl-X"),
                         MenuItem::new("Copy", CM_COPY).with_shortcut("Ctrl-C"),
                         MenuItem::new("Paste", CM_PASTE).with_shortcut("Ctrl-V"),
@@ -449,6 +451,14 @@ fn handle_command<T: Backend + EventSource>(
         return Ok(());
     }
     match command {
+        // Undo/redo from the Edit menu route straight back to the editor (the keys
+        // are handled in the editor itself).
+        CM_UNDO => {
+            ed.editor.undo();
+        }
+        CM_REDO => {
+            ed.editor.redo();
+        }
         CM_QUIT => {
             if confirm_discard(app, ed, theme)? {
                 ed.finished = true;
@@ -673,12 +683,37 @@ mod tests {
     }
 
     #[test]
-    fn the_edit_menu_posts_clipboard_commands() {
+    fn the_edit_menu_posts_its_commands() {
         let mut ed = app();
-        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit (Undo highlighted)
         assert!(ed.menu_is_open());
-        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: Cut
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: Undo
+        assert_eq!(posted, vec![CM_UNDO]);
+        // Re-open and step down to Cut to confirm the clipboard items are wired too.
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT);
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Redo
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Cut
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
         assert_eq!(posted, vec![CM_CUT]);
+    }
+
+    #[test]
+    fn ctrl_z_undoes_typing_through_the_app() {
+        let mut ed = app();
+        type_chars(&mut ed, "abc");
+        assert_eq!(ed.editor.text(), "abc");
+        keydown(&mut ed, KeyCode::Char('z'), Modifiers::CONTROL); // editor handles it
+        assert_eq!(ed.editor.text(), "", "the typing run undoes as one unit");
+        assert!(!ed.is_modified(), "undone back to the empty saved state");
+    }
+
+    #[test]
+    fn the_undo_menu_command_routes_to_the_editor() {
+        let mut ed = app();
+        type_chars(&mut ed, "z");
+        assert!(ed.editor.undo(), "a pending action to undo");
+        assert!(ed.editor.redo(), "and to redo");
+        assert_eq!(ed.editor.text(), "z");
     }
 
     #[test]
