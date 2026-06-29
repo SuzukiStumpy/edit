@@ -54,33 +54,45 @@ impl MessageBox {
 fn build(title: &str, message: &str, buttons: &[(&str, Command)], theme: &Theme) -> Dialog {
     const PAD: i16 = 2; // interior horizontal padding each side
     const GAP: i16 = 2; // columns between buttons
-    const MSG_ROW: i16 = 1;
-    const BTN_ROW: i16 = 3;
-    const INTERIOR_H: i16 = 5;
+    const MSG_TOP: i16 = 1; // first message row (row 0 is top padding)
 
-    let msg_w = message.chars().count() as i16;
+    // The message may span lines (split on '\n'); each becomes its own centred
+    // Label, so the box grows to fit rather than spilling off its single row.
+    let lines: Vec<&str> = message.split('\n').collect();
+    let line_w = |s: &str| s.chars().count() as i16;
+    let msg_w = lines.iter().map(|l| line_w(l)).max().unwrap_or(0);
+    let n = lines.len() as i16;
+
     let btn_w = |label: &str| label.chars().count() as i16 + 4;
     let buttons_w: i16 = buttons.iter().map(|(l, _)| btn_w(l)).sum::<i16>()
         + GAP * (buttons.len() as i16 - 1).max(0);
 
     let content_w = msg_w.max(buttons_w);
     let interior_w = content_w + 2 * PAD;
-    let size = Size::new(interior_w + 2, INTERIOR_H + 2);
+    let btn_row = MSG_TOP + n + 1; // a blank gap row between message and buttons
+    let interior_h = btn_row + 2; // buttons row + a bottom padding row
+    let size = Size::new(interior_w + 2, interior_h + 2);
 
-    let mut controls: Vec<Box<dyn View>> = Vec::with_capacity(buttons.len() + 1);
-    let msg_x = (interior_w - msg_w) / 2;
-    controls.push(Box::new(Label::new(
-        Rect::from_origin_size(Point::new(msg_x, MSG_ROW), Size::new(msg_w.max(0), 1)),
-        message,
-        theme,
-    )));
+    let mut controls: Vec<Box<dyn View>> = Vec::with_capacity(lines.len() + buttons.len());
+    for (i, line) in lines.iter().enumerate() {
+        let w = line_w(line);
+        if w == 0 {
+            continue; // a blank line just spaces things out; the dialog fills it
+        }
+        let x = (interior_w - w) / 2;
+        controls.push(Box::new(Label::new(
+            Rect::from_origin_size(Point::new(x, MSG_TOP + i as i16), Size::new(w, 1)),
+            line,
+            theme,
+        )));
+    }
 
     let mut x = (interior_w - buttons_w) / 2;
     for (i, (label, command)) in buttons.iter().enumerate() {
         let w = btn_w(label);
         controls.push(Box::new(
             Button::new(
-                Rect::from_origin_size(Point::new(x, BTN_ROW), Size::new(w, 1)),
+                Rect::from_origin_size(Point::new(x, btn_row), Size::new(w, 1)),
                 label,
                 *command,
                 theme,
@@ -142,6 +154,30 @@ mod tests {
     #[test]
     fn snapshot_message_box() {
         let d = MessageBox::yes_no("Confirm", "Save changes?", &Theme::default());
+        let size = d.size();
+        let mut buf = Buffer::new(size);
+        let mut canvas = Canvas::new(&mut buf);
+        d.draw(&mut canvas);
+        insta::assert_snapshot!(buf.to_text());
+    }
+
+    #[test]
+    fn each_message_line_adds_one_row_to_the_box() {
+        let one = MessageBox::ok("T", "One line.", &Theme::default());
+        // A blank middle line counts too — it is the spacer that previously bled.
+        let three = MessageBox::ok("T", "Line one.\n\nLine three.", &Theme::default());
+        assert_eq!(three.size().height - one.size().height, 2);
+    }
+
+    #[test]
+    fn snapshot_multiline_message_box() {
+        // The box grows to hold every line; the blank row is filled by the dialog,
+        // and no '\n' ever lands in a cell (each line is its own Label).
+        let d = MessageBox::ok(
+            "Paste",
+            "Clipboard is empty.\n\nUse Ctrl+Shift+V.",
+            &Theme::default(),
+        );
         let size = d.size();
         let mut buf = Buffer::new(size);
         let mut canvas = Canvas::new(&mut buf);

@@ -617,8 +617,19 @@ impl EditorView {
 
     /// Inserts `text` at the caret as one undo unit (replacing any selection
     /// first), leaving the caret at the far end of the inserted text. Used for
-    /// Paste; `text` may span lines.
+    /// Paste; `text` may span lines, with any line ending (`\n`, `\r\n`, or a
+    /// bare `\r` — a bracketed paste delivers newlines as CR, ADR 0022).
     pub fn insert_text(&mut self, text: &str) {
+        // Normalise to the buffer's '\n' so a multi-line paste lands as multiple
+        // lines, not one line with stray carriage returns. Internal paste is
+        // already '\n', so the common case allocates nothing.
+        let owned;
+        let text = if text.contains('\r') {
+            owned = text.replace("\r\n", "\n").replace('\r', "\n");
+            owned.as_str()
+        } else {
+            text
+        };
         let before = self.cursor;
         let (mut edits, at) = match self.selection_delete_edit() {
             Some((edit, start)) => (vec![edit], start),
@@ -1255,6 +1266,16 @@ mod tests {
     }
 
     #[test]
+    fn insert_text_normalises_cr_and_crlf_to_buffer_newlines() {
+        // A bracketed paste arrives CR-delimited; clipboards may carry CRLF. Both
+        // must land as real lines, not one line with stray carriage returns.
+        let mut e = editor(20, 5).clone_doc("");
+        e.insert_text("a\rb\r\nc");
+        assert_eq!(e.text(), "a\nb\nc");
+        assert_eq!(e.cursor(), Position::new(2, 1));
+    }
+
+    #[test]
     fn insert_text_replaces_an_active_selection() {
         let mut e = editor(20, 5).clone_doc("hello world");
         for _ in 0..5 {
@@ -1274,7 +1295,8 @@ mod tests {
         }
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
-        let r = e.handle_event(&Event::Paste("HI\nYO".to_string()), &mut ctx);
+        // CR-delimited (as a bracketed paste arrives) must still split into lines.
+        let r = e.handle_event(&Event::Paste("HI\rYO".to_string()), &mut ctx);
         assert_eq!(r, EventResult::Consumed);
         assert_eq!(e.text(), "HI\nYO world");
         assert!(

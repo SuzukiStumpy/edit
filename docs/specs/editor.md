@@ -94,7 +94,9 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   the key; the editor touches no clipboard state. The app calls back into
   `selected_text` / `take_selection` (Cut returns the span then deletes it) /
   `insert_text` (Paste replaces any selection, lands the caret at the far end of
-  the inserted text). Cut and paste are ordinary `Edit`s, so they will undo
+  the inserted text, and normalises `\r`/`\r\n` line endings to the buffer's `\n`
+  so a bracketed paste lands as real lines — ADR 0022). Cut and paste are ordinary
+  `Edit`s, so they will undo
   cleanly once 7b lands the journal (ADR 0019).
 - **Viewport** scrolls minimally to keep the cursor visible in both axes; a resize
   (`set_bounds`) re-clamps it. Drawing clips to the canvas, so an over-long line or

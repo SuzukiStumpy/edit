@@ -64,9 +64,10 @@ impl MessageBox {
   *ending* command returns from the loop; any other posted command/broadcast is
   re-dispatched into the dialog. The dialog never joins the application tree; it
   is dropped when the loop returns.
-- **MessageBox.** Centres the message on the first interior row and a centred row
-  of buttons below; the first button is the default and every button command is
-  registered as ending (so any button closes it). `ok` → `[CM_OK]`; `ok_cancel`
+- **MessageBox.** Splits the message on `\n` and centres each line on its own row
+  (the box grows in height/width to fit — no `\n` ever lands in a cell), then a
+  centred row of buttons below; the first button is the default and every button
+  command is registered as ending (so any button closes it). `ok` → `[CM_OK]`; `ok_cancel`
   → `CM_OK`/`CM_CANCEL`; `yes_no` → `CM_YES`/`CM_NO` (also-ends-on both).
 
 ## Collaborators

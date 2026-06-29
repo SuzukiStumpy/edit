@@ -1215,8 +1215,9 @@ fn handle_command<T: Backend + EventSource>(
                 theme,
                 "Paste",
                 "The editor clipboard is empty.\n\n\
-                 To paste text from another application, use your terminal's \
-                 paste — usually Ctrl+Shift+V.",
+                 To paste from another application,\n\
+                 use your terminal's paste\n\
+                 (usually Ctrl+Shift+V).",
             )?,
             _ => {}
         }
