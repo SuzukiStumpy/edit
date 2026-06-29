@@ -90,8 +90,9 @@ fn byte_of_column(line: &str, column: usize) -> usize {
 }
 
 /// The position reached by walking `text` forward from `at` — i.e. where an
-/// insertion of `text` ends, and the span a same-`text` deletion covers.
-fn position_after(at: Position, text: &str) -> Position {
+/// insertion of `text` ends, and the span a same-`text` deletion covers. The
+/// editor uses it to land the caret at the far end of a paste.
+pub(crate) fn position_after(at: Position, text: &str) -> Position {
     match text.rsplit_once('\n') {
         None => Position::new(at.line, at.column + text.graphemes(true).count()),
         Some((before, last)) => Position::new(

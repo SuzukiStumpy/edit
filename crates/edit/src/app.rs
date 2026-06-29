@@ -27,7 +27,7 @@ use rvision::widgets::{
     FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, ScrollBar, StatusItem, StatusLine,
 };
 
-use crate::editor::EditorView;
+use crate::editor::{CM_COPY, CM_CUT, CM_PASTE, EditorView};
 use crate::file::{self, Encoding};
 
 /// File ▸ New.
@@ -50,6 +50,8 @@ pub struct EditorApp {
     path: Option<PathBuf>,
     /// The encoding to preserve on save (ADR 0010).
     encoding: Encoding,
+    /// The internal clipboard for Cut/Copy/Paste (ADR 0019; OSC 52 is Phase 10).
+    clipboard: String,
     finished: bool,
     frame_style: Style,
     title_style: Style,
@@ -88,16 +90,26 @@ impl EditorApp {
     pub fn new(size: Size, theme: &Theme) -> Self {
         let menu_bar = MenuBar::new(
             regions(size).menu,
-            vec![Menu::new(
-                "File",
-                vec![
-                    MenuItem::new("New", CM_NEW),
-                    MenuItem::new("Open...", CM_OPEN).with_shortcut("F3"),
-                    MenuItem::new("Save", CM_SAVE).with_shortcut("F2"),
-                    MenuItem::new("Save As...", CM_SAVE_AS),
-                    MenuItem::new("Exit", CM_QUIT).with_shortcut("Alt-X"),
-                ],
-            )],
+            vec![
+                Menu::new(
+                    "File",
+                    vec![
+                        MenuItem::new("New", CM_NEW),
+                        MenuItem::new("Open...", CM_OPEN).with_shortcut("F3"),
+                        MenuItem::new("Save", CM_SAVE).with_shortcut("F2"),
+                        MenuItem::new("Save As...", CM_SAVE_AS),
+                        MenuItem::new("Exit", CM_QUIT).with_shortcut("Alt-X"),
+                    ],
+                ),
+                Menu::new(
+                    "Edit",
+                    vec![
+                        MenuItem::new("Cut", CM_CUT).with_shortcut("Ctrl-X"),
+                        MenuItem::new("Copy", CM_COPY).with_shortcut("Ctrl-C"),
+                        MenuItem::new("Paste", CM_PASTE).with_shortcut("Ctrl-V"),
+                    ],
+                ),
+            ],
             theme,
         );
         let status_line = StatusLine::new(
@@ -135,6 +147,7 @@ impl EditorApp {
             size,
             path: None,
             encoding: Encoding::new_file(),
+            clipboard: String::new(),
             finished: false,
             frame_style: theme.style(Role::WindowFrame),
             title_style: theme.style(Role::WindowTitle),
@@ -284,6 +297,34 @@ impl EditorApp {
             .collect()
     }
 
+    /// Acts on a clipboard command (Cut/Copy/Paste), returning whether `command`
+    /// was one. The app owns the clipboard so these need no terminal — the driver
+    /// runs them before the dialog-bearing file commands (ADR 0019).
+    pub fn handle_clipboard(&mut self, command: Command) -> bool {
+        match command {
+            CM_COPY => {
+                if let Some(text) = self.editor.selected_text() {
+                    self.clipboard = text;
+                }
+                true
+            }
+            CM_CUT => {
+                if let Some(text) = self.editor.take_selection() {
+                    self.clipboard = text;
+                }
+                true
+            }
+            CM_PASTE => {
+                if !self.clipboard.is_empty() {
+                    let text = self.clipboard.clone();
+                    self.editor.insert_text(&text);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Draws the whole screen into `canvas`.
     fn draw_canvas(&self, canvas: &mut Canvas) {
         let r = regions(self.size);
@@ -403,6 +444,10 @@ fn handle_command<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
+    // Clipboard commands need no dialog/terminal; act on them first (ADR 0019).
+    if ed.handle_clipboard(command) {
+        return Ok(());
+    }
     match command {
         CM_QUIT => {
             if confirm_discard(app, ed, theme)? {
@@ -574,6 +619,66 @@ mod tests {
         keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File (New highlighted)
         let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
         assert_eq!(posted, vec![CM_NEW]);
+    }
+
+    // --- clipboard (ADR 0019) ---
+
+    fn type_chars(ed: &mut EditorApp, s: &str) {
+        for c in s.chars() {
+            keydown(ed, KeyCode::Char(c), Modifiers::NONE);
+        }
+    }
+
+    /// Drives the editor like the loop does: dispatch the key, then act on every
+    /// command it posts (clipboard commands need no terminal).
+    fn run_key(ed: &mut EditorApp, code: KeyCode, mods: Modifiers) {
+        for command in keydown(ed, code, mods) {
+            assert!(
+                ed.handle_clipboard(command),
+                "{command:?} is a clipboard cmd"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_then_paste_round_trips_through_the_clipboard() {
+        let mut ed = app();
+        type_chars(&mut ed, "abc");
+        run_key(&mut ed, KeyCode::Home, Modifiers::CONTROL);
+        run_key(&mut ed, KeyCode::End, Modifiers::SHIFT); // select "abc"
+        run_key(&mut ed, KeyCode::Char('c'), Modifiers::CONTROL); // copy
+        run_key(&mut ed, KeyCode::End, Modifiers::CONTROL); // caret to end, clear selection
+        run_key(&mut ed, KeyCode::Char('v'), Modifiers::CONTROL); // paste
+        assert_eq!(ed.editor.text(), "abcabc");
+    }
+
+    #[test]
+    fn cut_removes_the_selection_and_paste_restores_it() {
+        let mut ed = app();
+        type_chars(&mut ed, "abc");
+        run_key(&mut ed, KeyCode::Home, Modifiers::CONTROL);
+        run_key(&mut ed, KeyCode::End, Modifiers::SHIFT); // select "abc"
+        run_key(&mut ed, KeyCode::Char('x'), Modifiers::CONTROL); // cut
+        assert_eq!(ed.editor.text(), "");
+        run_key(&mut ed, KeyCode::Char('v'), Modifiers::CONTROL); // paste it back
+        assert_eq!(ed.editor.text(), "abc");
+    }
+
+    #[test]
+    fn paste_with_an_empty_clipboard_is_a_no_op() {
+        let mut ed = app();
+        type_chars(&mut ed, "x");
+        assert!(ed.handle_clipboard(CM_PASTE));
+        assert_eq!(ed.editor.text(), "x");
+    }
+
+    #[test]
+    fn the_edit_menu_posts_clipboard_commands() {
+        let mut ed = app();
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit
+        assert!(ed.menu_is_open());
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: Cut
+        assert_eq!(posted, vec![CM_CUT]);
     }
 
     #[test]

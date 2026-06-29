@@ -55,6 +55,11 @@ pub fn run<T: Backend + EventSource>(app: Application<T>, ed: EditorApp, theme: 
   resize relays out and re-clamps the editor's scroll.
 - **Discard guard:** New/Open/Exit on a modified document prompt Yes/No/Cancel;
   Save with no path falls through to Save As; an I/O error shows a message box.
+- **Clipboard (ADR 0019):** `EditorApp` owns the `String` clipboard; the editor
+  posts `CM_CUT`/`CM_COPY`/`CM_PASTE` (keys or the Edit menu) and `handle_clipboard`
+  acts on them — Copy reads `selected_text`, Cut `take_selection`, Paste
+  `insert_text`. It needs no terminal, so the driver runs it before the file
+  commands and it is unit-tested headlessly.
 - The title shows the file name (or `Untitled`) with a `*` when modified.
 
 ## Collaborators
@@ -75,6 +80,6 @@ pub fn run<T: Backend + EventSource>(app: Application<T>, ed: EditorApp, theme: 
 
 ## Open questions
 
-- Find/Replace, Go-to-line, undo/redo, and the clipboard are Phase 7; the menus
-  will grow then. A reusable "modal-capable root" could be lifted into `rvision`
-  if a second application needs one (ADR 0018).
+- Find/Replace, Go-to-line, and undo/redo are Phase 7b–c; the menus will grow
+  then (the clipboard landed in 7a). A reusable "modal-capable root" could be
+  lifted into `rvision` if a second application needs one (ADR 0018).

@@ -3,15 +3,19 @@
 //! reversible [`Edit`]s (see `docs/specs/editor.md`).
 //!
 //! It is a plain [`View`] — no terminal, no files (load/save is Phase 6b), no undo
-//! stack or clipboard (Phase 7). Editing already flows through the reversible
-//! [`Edit`] type (ADR 0011); the journal that makes undo possible comes later.
-//! Display geometry (tab expansion, wide graphemes) lives in one place,
-//! [`line_columns`], so rendering and vertical cursor motion can never disagree.
+//! stack (Phase 7b). Editing already flows through the reversible [`Edit`] type
+//! (ADR 0011); the journal that makes undo possible comes later. The clipboard
+//! itself lives in the app (ADR 0019): the editor only posts `CM_CUT`/`CM_COPY`/
+//! `CM_PASTE` and exposes [`take_selection`](EditorView::take_selection) /
+//! [`insert_text`](EditorView::insert_text) for the app to drive. Display geometry
+//! (tab expansion, wide graphemes) lives in one place, [`line_columns`], so
+//! rendering and vertical cursor motion can never disagree.
 
-use crate::text::{Edit, LineArray, Position, TextBuffer};
+use crate::text::{Edit, LineArray, Position, TextBuffer, position_after};
 use rvision::canvas::Canvas;
 use rvision::cell::{Cell, Grapheme};
 use rvision::color::{Attributes, Style};
+use rvision::command::{CM_USER, Command};
 use rvision::event::{Event, EventResult, KeyCode, Modifiers};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
@@ -20,6 +24,14 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// The default tab stop width in columns (ADR 0010 — display width 8).
 const DEFAULT_TAB_WIDTH: usize = 8;
+
+/// Edit ▸ Cut — remove the selection to the clipboard. Posted by the editor,
+/// acted on by the app, which owns the clipboard (ADR 0019).
+pub const CM_CUT: Command = Command(CM_USER + 10);
+/// Edit ▸ Copy — copy the selection to the clipboard.
+pub const CM_COPY: Command = Command(CM_USER + 11);
+/// Edit ▸ Paste — insert the clipboard at the caret.
+pub const CM_PASTE: Command = Command(CM_USER + 12);
 
 /// A scrolling text editor over one owned [`LineArray`] document.
 pub struct EditorView {
@@ -165,6 +177,12 @@ impl EditorView {
         self.grapheme_at(pos)
             .and_then(|g| g.chars().next())
             .is_some_and(is_word_char)
+    }
+
+    /// Posts `command` for the app to act on and reports the key consumed.
+    fn post(&self, ctx: &mut Context, command: Command) -> EventResult {
+        ctx.post(command);
+        EventResult::Consumed
     }
 
     /// The ordered selection span `(start, end)`, or `None` if there is no
@@ -334,6 +352,27 @@ impl EditorView {
         self.cursor = start;
         self.anchor = None;
         true
+    }
+
+    /// Inserts `text` at the caret as one [`Edit`] (replacing any selection
+    /// first), leaving the caret at the far end of the inserted text. Used for
+    /// Paste; `text` may span lines.
+    pub fn insert_text(&mut self, text: &str) {
+        self.delete_selection();
+        let at = self.cursor;
+        self.apply(&Edit::insert(at, text));
+        self.cursor = position_after(at, text);
+        self.ensure_visible();
+    }
+
+    /// Removes the current selection and returns its text, or `None` if nothing is
+    /// selected. Used for Cut — the app stores the returned text on the clipboard
+    /// (ADR 0019).
+    pub fn take_selection(&mut self) -> Option<String> {
+        let text = self.selected_text()?;
+        self.delete_selection();
+        self.ensure_visible();
+        Some(text)
     }
 
     /// Inserts a single character at the caret (replacing any selection first).
@@ -577,13 +616,24 @@ impl View for EditorView {
         }
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &mut Context) -> EventResult {
+    fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
         let shift = key.modifiers.contains(Modifiers::SHIFT);
         let ctrl = key.modifiers.contains(Modifiers::CONTROL);
         let alt = key.modifiers.contains(Modifiers::ALT);
+        // Clipboard keys post a command for the app to act on (it owns the
+        // clipboard — ADR 0019); the editor itself touches nothing here.
+        match key.code {
+            KeyCode::Char('c' | 'C') if ctrl && !alt => return self.post(ctx, CM_COPY),
+            KeyCode::Char('x' | 'X') if ctrl && !alt => return self.post(ctx, CM_CUT),
+            KeyCode::Char('v' | 'V') if ctrl && !alt => return self.post(ctx, CM_PASTE),
+            KeyCode::Insert if ctrl => return self.post(ctx, CM_COPY),
+            KeyCode::Insert if shift => return self.post(ctx, CM_PASTE),
+            KeyCode::Delete if shift => return self.post(ctx, CM_CUT),
+            _ => {}
+        }
         match key.code {
             KeyCode::Char(c) if !c.is_control() && !ctrl && !alt => {
                 self.insert_char(c);
@@ -856,6 +906,74 @@ mod tests {
         assert!(e.selected_text().is_some());
         key(&mut e, KeyCode::Right);
         assert_eq!(e.selected_text(), None);
+    }
+
+    // --- clipboard primitives (the app owns the clipboard; ADR 0019) ---
+
+    #[test]
+    fn insert_text_pastes_multiline_and_lands_the_cursor_at_its_end() {
+        let mut e = editor(20, 5).clone_doc("ab");
+        key(&mut e, KeyCode::End); // cursor at (0, 2)
+        e.insert_text("X\nYZ");
+        assert_eq!(e.text(), "abX\nYZ");
+        assert_eq!(e.cursor(), Position::new(1, 2));
+        assert!(e.is_modified());
+    }
+
+    #[test]
+    fn insert_text_replaces_an_active_selection() {
+        let mut e = editor(20, 5).clone_doc("hello world");
+        for _ in 0..5 {
+            press(&mut e, KeyCode::Right, Modifiers::SHIFT); // select "hello"
+        }
+        e.insert_text("HI");
+        assert_eq!(e.text(), "HI world");
+        assert_eq!(e.cursor(), Position::new(0, 2));
+        assert_eq!(e.selected_text(), None);
+    }
+
+    #[test]
+    fn take_selection_returns_and_removes_it_then_is_none() {
+        let mut e = editor(20, 5).clone_doc("hello");
+        for _ in 0..3 {
+            press(&mut e, KeyCode::Right, Modifiers::SHIFT); // select "hel"
+        }
+        assert_eq!(e.take_selection().as_deref(), Some("hel"));
+        assert_eq!(e.text(), "lo");
+        assert_eq!(e.cursor(), Position::new(0, 0));
+        // With nothing selected it takes nothing and leaves the document alone.
+        assert_eq!(e.take_selection(), None);
+        assert_eq!(e.text(), "lo");
+    }
+
+    #[test]
+    fn clipboard_keys_post_commands_without_touching_the_document() {
+        let mut e = editor(20, 5).clone_doc("abc");
+        for _ in 0..2 {
+            press(&mut e, KeyCode::Right, Modifiers::SHIFT); // select "ab"
+        }
+        let posted = |e: &mut EditorView, code, mods| {
+            let cs = CommandSet::new();
+            let mut ctx = Context::new(&cs);
+            let r = e.handle_event(&Event::Key(KeyEvent::new(code, mods)), &mut ctx);
+            (r, ctx.take_posted())
+        };
+        let (r, p) = posted(&mut e, KeyCode::Char('c'), Modifiers::CONTROL);
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(p, vec![Event::Command(CM_COPY)]);
+        let (_, p) = posted(&mut e, KeyCode::Char('x'), Modifiers::CONTROL);
+        assert_eq!(p, vec![Event::Command(CM_CUT)]);
+        let (_, p) = posted(&mut e, KeyCode::Char('v'), Modifiers::CONTROL);
+        assert_eq!(p, vec![Event::Command(CM_PASTE)]);
+        // The classic accelerators map to the same commands.
+        let (_, p) = posted(&mut e, KeyCode::Insert, Modifiers::CONTROL);
+        assert_eq!(p, vec![Event::Command(CM_COPY)]);
+        let (_, p) = posted(&mut e, KeyCode::Insert, Modifiers::SHIFT);
+        assert_eq!(p, vec![Event::Command(CM_PASTE)]);
+        let (_, p) = posted(&mut e, KeyCode::Delete, Modifiers::SHIFT);
+        assert_eq!(p, vec![Event::Command(CM_CUT)]);
+        // The keys posted commands only — the editor mutated nothing itself.
+        assert_eq!(e.text(), "abc");
     }
 
     // --- viewport / scroll ---

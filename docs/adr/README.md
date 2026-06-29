@@ -24,5 +24,6 @@ rewriting an old one.
 | [0016](0016-application-shell-menu-overlay.md) | `TProgram`-style application shell + drawn menu overlay |
 | [0017](0017-modal-dialogs-and-focus-aware-controls.md) | Modal dialogs via `exec_view` + focus-aware controls (`set_focused`) |
 | [0018](0018-editor-app-bespoke-driver-loop.md) | Editor uses a bespoke driver loop interleaving `exec_view` |
+| [0019](0019-clipboard-app-owned-command-routed.md) | Clipboard is app-owned and reached by commands |
 
 New decision? Copy [`0000-template.md`](0000-template.md).

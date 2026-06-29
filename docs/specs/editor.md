@@ -1,9 +1,9 @@
 # Module spec: `edit::editor`
 
 - **Status:** Done
-- **Phase:** 6 (editor, single document) — sub-phase 6a
+- **Phase:** 6 (editor, single document) — sub-phase 6a; clipboard primitives 7a
 - **Related ADRs:** 0006 (full Unicode), 0008 (line-array text), 0011 (reversible
-  edits), 0015 (canvas), 0017 (focus-in-draw push)
+  edits), 0015 (canvas), 0017 (focus-in-draw push), 0019 (app-owned clipboard)
 
 ## Purpose
 
@@ -30,9 +30,16 @@ impl EditorView {
     pub fn cursor(&self) -> Position;
     pub fn is_modified(&self) -> bool;
     pub fn mark_saved(&mut self);                          // clear the dirty flag
-    pub fn selected_text(&self) -> Option<String>;         // for Phase 7 clipboard
+    pub fn selected_text(&self) -> Option<String>;         // Copy reads this
+    pub fn take_selection(&mut self) -> Option<String>;    // Cut: return + delete
+    pub fn insert_text(&mut self, text: &str);             // Paste: multi-line insert
     pub fn set_bounds(&mut self, bounds: Rect);            // relayout
 }
+
+// Clipboard commands the editor *posts* (the app owns the clipboard — ADR 0019):
+pub const CM_CUT: Command;   // Ctrl+X / Shift+Del
+pub const CM_COPY: Command;  // Ctrl+C / Ctrl+Ins
+pub const CM_PASTE: Command; // Ctrl+V / Shift+Ins
 
 impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_focused */ }
 ```
@@ -54,6 +61,13 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   selection, and re-scrolls to keep the cursor visible.
 - **An active selection is replaced** by typing/Backspace/Delete (delete the span
   as one `Edit`, then insert). With no selection those keys act at the cursor.
+- **Clipboard keys post, never mutate.** Ctrl+C/X/V (and the classic
+  Ctrl+Ins / Shift+Ins / Shift+Del) post `CM_COPY`/`CM_CUT`/`CM_PASTE` and consume
+  the key; the editor touches no clipboard state. The app calls back into
+  `selected_text` / `take_selection` (Cut returns the span then deletes it) /
+  `insert_text` (Paste replaces any selection, lands the caret at the far end of
+  the inserted text). Cut and paste are ordinary `Edit`s, so they will undo
+  cleanly once 7b lands the journal (ADR 0019).
 - **Viewport** scrolls minimally to keep the cursor visible in both axes; a resize
   (`set_bounds`) re-clamps it. Drawing clips to the canvas, so an over-long line or
   a line below the document is simply not drawn.
