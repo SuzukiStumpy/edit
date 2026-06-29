@@ -43,17 +43,73 @@ pub const CM_SAVE: Command = Command(CM_USER + 3);
 /// File ▸ Save As.
 pub const CM_SAVE_AS: Command = Command(CM_USER + 4);
 
-/// The editor application root: chrome + the owned document view + the current
-/// file's path and [`Encoding`].
-pub struct EditorApp {
-    menu_bar: MenuBar,
-    status_line: StatusLine,
+/// One open document: its editor view, the file's path, and the [`Encoding`] to
+/// preserve on save (ADR 0010). `EditorApp` owns a `Vec<Document>` for MDI
+/// (ADR 0009), concretely rather than as `Box<dyn View>` so file/edit operations
+/// reach the editor with no downcast (ADR 0018).
+struct Document {
     editor: EditorView,
-    size: Size,
     /// The open file's path, or `None` for an unsaved new document.
     path: Option<PathBuf>,
     /// The encoding to preserve on save (ADR 0010).
     encoding: Encoding,
+}
+
+impl Document {
+    /// A new, empty, unsaved document with a focused editor (bounds are set on the
+    /// next relayout).
+    fn new(theme: &Theme) -> Self {
+        let mut editor = EditorView::new(Rect::default(), theme);
+        editor.set_focused(true);
+        Self {
+            editor,
+            path: None,
+            encoding: Encoding::new_file(),
+        }
+    }
+
+    /// Whether the document has unsaved changes.
+    fn is_modified(&self) -> bool {
+        self.editor.is_modified()
+    }
+
+    /// The window title: the file name (or `Untitled`), with a `*` when modified.
+    fn title(&self) -> String {
+        let name = match &self.path {
+            Some(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string_lossy().into_owned()),
+            None => "Untitled".to_string(),
+        };
+        if self.is_modified() {
+            format!("{name} *")
+        } else {
+            name
+        }
+    }
+
+    /// The directory a file dialog should start in: this file's folder, or the
+    /// process working directory.
+    fn start_dir(&self) -> PathBuf {
+        self.path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    }
+}
+
+/// The editor application root: chrome + the owned documents (one framed window
+/// each) with an active index, plus the app-wide clipboard.
+pub struct EditorApp {
+    menu_bar: MenuBar,
+    status_line: StatusLine,
+    /// The open documents, drawn bottom-to-top; never empty.
+    documents: Vec<Document>,
+    /// Index into `documents` of the active (focused, topmost) window.
+    active: usize,
+    size: Size,
     /// The internal clipboard for Cut/Copy/Paste (ADR 0019; OSC 52 is Phase 10).
     clipboard: String,
     finished: bool,
@@ -148,16 +204,12 @@ impl EditorApp {
             theme.style(Role::StatusBar),
             theme.style(Role::StatusKey),
         );
-        let mut editor = EditorView::new(Rect::default(), theme);
-        editor.set_focused(true);
-
         let mut app = Self {
             menu_bar,
             status_line,
-            editor,
+            documents: vec![Document::new(theme)],
+            active: 0,
             size,
-            path: None,
-            encoding: Encoding::new_file(),
             clipboard: String::new(),
             finished: false,
             frame_style: theme.style(Role::WindowFrame),
@@ -168,13 +220,17 @@ impl EditorApp {
         app
     }
 
-    /// Repositions the chrome and the editor for a terminal of `size`.
+    /// Repositions the chrome and the editors for a terminal of `size`. Every
+    /// document is currently maximised, so they share the one interior rectangle.
     pub fn relayout(&mut self, size: Size) {
         self.size = size;
         let r = regions(size);
         self.menu_bar.set_bounds(r.menu);
         self.status_line.set_bounds(r.status);
-        self.editor.set_bounds(inset1(r.desktop));
+        let interior = inset1(r.desktop);
+        for doc in &mut self.documents {
+            doc.editor.set_bounds(interior);
+        }
     }
 
     /// Whether a menu pull-down is open (for tests / the loop).
@@ -182,9 +238,29 @@ impl EditorApp {
         self.menu_bar.is_open()
     }
 
-    /// Whether the document has unsaved changes.
+    /// The active document (always present — `documents` is never empty).
+    fn doc(&self) -> &Document {
+        &self.documents[self.active]
+    }
+
+    /// The active document, mutably.
+    fn doc_mut(&mut self) -> &mut Document {
+        &mut self.documents[self.active]
+    }
+
+    /// The active document's editor view.
+    pub fn active_editor(&self) -> &EditorView {
+        &self.doc().editor
+    }
+
+    /// The active document's editor view, mutably.
+    pub fn active_editor_mut(&mut self) -> &mut EditorView {
+        &mut self.doc_mut().editor
+    }
+
+    /// Whether the active document has unsaved changes.
     pub fn is_modified(&self) -> bool {
-        self.editor.is_modified()
+        self.doc().is_modified()
     }
 
     /// Whether the loop should stop.
@@ -192,48 +268,34 @@ impl EditorApp {
         self.finished
     }
 
-    /// The open file's path, if any.
+    /// The active document's file path, if any.
     pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+        self.doc().path.as_deref()
     }
 
-    /// The window title: the file name (or `Untitled`), with a `*` when modified.
+    /// The active document's window title (file name or `Untitled`, `*` if dirty).
     fn title(&self) -> String {
-        let name = match &self.path {
-            Some(p) => p
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| p.to_string_lossy().into_owned()),
-            None => "Untitled".to_string(),
-        };
-        if self.is_modified() {
-            format!("{name} *")
-        } else {
-            name
-        }
+        self.doc().title()
     }
 
-    /// The directory a file dialog should start in: the current file's folder, or
+    /// The directory a file dialog should start in: the active file's folder, or
     /// the process working directory.
     pub fn start_dir(&self) -> PathBuf {
-        self.path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        self.doc().start_dir()
     }
 
     // --- file operations (terminal-free, unit-tested) ---
 
-    /// Resets to an empty, unsaved document.
+    /// Resets the active document to empty and unsaved.
     pub fn new_file(&mut self) {
-        self.editor.set_text("");
-        self.path = None;
-        self.encoding = Encoding::new_file();
+        let doc = self.doc_mut();
+        doc.editor.set_text("");
+        doc.path = None;
+        doc.encoding = Encoding::new_file();
     }
 
-    /// Loads `path` into the editor, adopting its encoding. Returns whether the
-    /// bytes were decoded lossily (so the caller can warn).
+    /// Loads `path` into the active document, adopting its encoding. Returns
+    /// whether the bytes were decoded lossily (so the caller can warn).
     ///
     /// # Errors
     ///
@@ -241,13 +303,14 @@ impl EditorApp {
     pub fn open_file(&mut self, path: impl Into<PathBuf>) -> io::Result<bool> {
         let path = path.into();
         let loaded = file::load(&path)?;
-        self.editor.set_text(&loaded.text);
-        self.encoding = loaded.encoding;
-        self.path = Some(path);
+        let doc = self.doc_mut();
+        doc.editor.set_text(&loaded.text);
+        doc.encoding = loaded.encoding;
+        doc.path = Some(path);
         Ok(loaded.lossy)
     }
 
-    /// Writes the document to `path` (adopting it as the current file) using the
+    /// Writes the active document to `path` (adopting it as its file) using the
     /// preserved encoding, then clears the dirty flag.
     ///
     /// # Errors
@@ -255,14 +318,16 @@ impl EditorApp {
     /// Propagates any I/O error from writing the file.
     pub fn save_to(&mut self, path: impl Into<PathBuf>) -> io::Result<()> {
         let path = path.into();
-        file::save(&path, &self.editor.text(), &self.encoding)?;
-        self.editor.mark_saved();
-        self.path = Some(path);
+        let doc = self.doc_mut();
+        file::save(&path, &doc.editor.text(), &doc.encoding)?;
+        doc.editor.mark_saved();
+        doc.path = Some(path);
         Ok(())
     }
 
-    /// Opens `path` if it exists, otherwise starts an empty document that will be
-    /// created at `path` on the first save (the `edit FILE` command-line case).
+    /// Opens `path` into the active document if it exists, otherwise starts an
+    /// empty document that will be created at `path` on the first save (the
+    /// `edit FILE` command-line case).
     ///
     /// # Errors
     ///
@@ -272,9 +337,10 @@ impl EditorApp {
         if path.exists() {
             self.open_file(path)
         } else {
-            self.editor.set_text("");
-            self.encoding = Encoding::new_file();
-            self.path = Some(path);
+            let doc = self.doc_mut();
+            doc.editor.set_text("");
+            doc.encoding = Encoding::new_file();
+            doc.path = Some(path);
             Ok(false)
         }
     }
@@ -288,10 +354,14 @@ impl EditorApp {
         let mut ctx = Context::new(commands);
         match event {
             Event::Key(_) => {
-                self.menu_bar
-                    .handle_event(event, &mut ctx)
-                    .or_else(|| self.editor.handle_event(event, &mut ctx))
-                    .or_else(|| self.status_line.handle_event(event, &mut ctx));
+                // menu (pre-process) → active editor (focused) → status (post).
+                let mut result = self.menu_bar.handle_event(event, &mut ctx);
+                if result == EventResult::Ignored {
+                    result = self.doc_mut().editor.handle_event(event, &mut ctx);
+                }
+                if result == EventResult::Ignored {
+                    self.status_line.handle_event(event, &mut ctx);
+                }
             }
             Event::Idle | Event::Broadcast(_) => {
                 self.menu_bar.handle_event(event, &mut ctx);
@@ -314,13 +384,13 @@ impl EditorApp {
     pub fn handle_clipboard(&mut self, command: Command) -> bool {
         match command {
             CM_COPY => {
-                if let Some(text) = self.editor.selected_text() {
+                if let Some(text) = self.active_editor().selected_text() {
                     self.clipboard = text;
                 }
                 true
             }
             CM_CUT => {
-                if let Some(text) = self.editor.take_selection() {
+                if let Some(text) = self.active_editor_mut().take_selection() {
                     self.clipboard = text;
                 }
                 true
@@ -328,7 +398,7 @@ impl EditorApp {
             CM_PASTE => {
                 if !self.clipboard.is_empty() {
                     let text = self.clipboard.clone();
-                    self.editor.insert_text(&text);
+                    self.active_editor_mut().insert_text(&text);
                 }
                 true
             }
@@ -348,7 +418,7 @@ impl EditorApp {
                 .draw(&mut win);
             let interior = inset1(area);
             if !interior.is_empty() {
-                self.editor.draw(&mut win.child(interior));
+                self.active_editor().draw(&mut win.child(interior));
                 self.draw_scrollbars(&mut win, area);
             }
         }
@@ -363,7 +433,7 @@ impl EditorApp {
     /// the window's canvas and `area` its local bounds (`(0, 0)`-origin).
     fn draw_scrollbars(&self, win: &mut Canvas, area: Rect) {
         let Size { width, height } = area.size();
-        let m = self.editor.scroll_metrics();
+        let m = self.active_editor().scroll_metrics();
 
         // Vertical bar on the right border, between the top and bottom corners.
         let vbar = Rect::from_origin_size(Point::new(width - 1, 1), Size::new(1, height - 2));
@@ -463,10 +533,10 @@ fn handle_command<T: Backend + EventSource>(
         // Undo/redo from the Edit menu route straight back to the editor (the keys
         // are handled in the editor itself).
         CM_UNDO => {
-            ed.editor.undo();
+            ed.active_editor_mut().undo();
         }
         CM_REDO => {
-            ed.editor.redo();
+            ed.active_editor_mut().redo();
         }
         CM_QUIT => {
             if confirm_discard(app, ed, theme)? {
@@ -487,7 +557,7 @@ fn handle_command<T: Backend + EventSource>(
         }
         CM_FIND => find(app, ed, theme)?,
         CM_FIND_NEXT => {
-            ed.editor.find_next(false);
+            ed.active_editor_mut().find_next(false);
         }
         CM_REPLACE => replace(app, ed, theme)?,
         CM_GOTO => go_to_line(app, ed, theme)?,
@@ -510,7 +580,9 @@ fn replace<T: Backend + EventSource>(
     if query.needle.is_empty() {
         return Ok(());
     }
-    let count = ed.editor.replace_all(&query, &dialog.replacement());
+    let count = ed
+        .active_editor_mut()
+        .replace_all(&query, &dialog.replacement());
     let report = match count {
         0 => "Text not found.".to_string(),
         1 => "Replaced 1 occurrence.".to_string(),
@@ -529,7 +601,7 @@ fn find<T: Backend + EventSource>(
     if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
         let query = dialog.query();
         if !query.needle.is_empty() {
-            ed.editor.find(query, dialog.backward());
+            ed.active_editor_mut().find(query, dialog.backward());
         }
     }
     Ok(())
@@ -544,7 +616,7 @@ fn go_to_line<T: Backend + EventSource>(
     let mut dialog = GoToLine::new(theme);
     if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
         if let Some(line) = dialog.line() {
-            ed.editor.go_to_line(line);
+            ed.active_editor_mut().go_to_line(line);
         }
     }
     Ok(())
@@ -672,7 +744,7 @@ mod tests {
         let posted = keydown(&mut ed, KeyCode::Char('h'), Modifiers::NONE);
         assert!(posted.is_empty(), "a printable key posts no command");
         assert!(ed.is_modified());
-        assert_eq!(ed.editor.text(), "h");
+        assert_eq!(ed.active_editor().text(), "h");
     }
 
     #[test]
@@ -728,7 +800,7 @@ mod tests {
         run_key(&mut ed, KeyCode::Char('c'), Modifiers::CONTROL); // copy
         run_key(&mut ed, KeyCode::End, Modifiers::CONTROL); // caret to end, clear selection
         run_key(&mut ed, KeyCode::Char('v'), Modifiers::CONTROL); // paste
-        assert_eq!(ed.editor.text(), "abcabc");
+        assert_eq!(ed.active_editor().text(), "abcabc");
     }
 
     #[test]
@@ -738,9 +810,9 @@ mod tests {
         run_key(&mut ed, KeyCode::Home, Modifiers::CONTROL);
         run_key(&mut ed, KeyCode::End, Modifiers::SHIFT); // select "abc"
         run_key(&mut ed, KeyCode::Char('x'), Modifiers::CONTROL); // cut
-        assert_eq!(ed.editor.text(), "");
+        assert_eq!(ed.active_editor().text(), "");
         run_key(&mut ed, KeyCode::Char('v'), Modifiers::CONTROL); // paste it back
-        assert_eq!(ed.editor.text(), "abc");
+        assert_eq!(ed.active_editor().text(), "abc");
     }
 
     #[test]
@@ -748,7 +820,7 @@ mod tests {
         let mut ed = app();
         type_chars(&mut ed, "x");
         assert!(ed.handle_clipboard(CM_PASTE));
-        assert_eq!(ed.editor.text(), "x");
+        assert_eq!(ed.active_editor().text(), "x");
     }
 
     #[test]
@@ -770,9 +842,13 @@ mod tests {
     fn ctrl_z_undoes_typing_through_the_app() {
         let mut ed = app();
         type_chars(&mut ed, "abc");
-        assert_eq!(ed.editor.text(), "abc");
+        assert_eq!(ed.active_editor().text(), "abc");
         keydown(&mut ed, KeyCode::Char('z'), Modifiers::CONTROL); // editor handles it
-        assert_eq!(ed.editor.text(), "", "the typing run undoes as one unit");
+        assert_eq!(
+            ed.active_editor().text(),
+            "",
+            "the typing run undoes as one unit"
+        );
         assert!(!ed.is_modified(), "undone back to the empty saved state");
     }
 
@@ -780,9 +856,9 @@ mod tests {
     fn the_undo_menu_command_routes_to_the_editor() {
         let mut ed = app();
         type_chars(&mut ed, "z");
-        assert!(ed.editor.undo(), "a pending action to undo");
-        assert!(ed.editor.redo(), "and to redo");
-        assert_eq!(ed.editor.text(), "z");
+        assert!(ed.active_editor_mut().undo(), "a pending action to undo");
+        assert!(ed.active_editor_mut().redo(), "and to redo");
+        assert_eq!(ed.active_editor().text(), "z");
     }
 
     #[test]
@@ -793,13 +869,17 @@ mod tests {
         let posted = keydown(&mut ed, KeyCode::Char('f'), Modifiers::CONTROL);
         assert_eq!(posted, vec![CM_FIND]);
         // Seed a query directly, then F3 (Find Next) is handled inside the editor.
-        ed.editor.find(crate::search::Query::new("ab"), false); // selects 0..2
+        ed.active_editor_mut()
+            .find(crate::search::Query::new("ab"), false); // selects 0..2
         let posted = keydown(&mut ed, KeyCode::F(3), Modifiers::NONE);
         assert!(
             posted.is_empty(),
             "F3 is consumed by the editor, posts nothing"
         );
-        assert_eq!(ed.editor.cursor(), crate::text::Position::new(0, 5));
+        assert_eq!(
+            ed.active_editor().cursor(),
+            crate::text::Position::new(0, 5)
+        );
     }
 
     #[test]
@@ -843,7 +923,7 @@ mod tests {
         let mut ed = EditorApp::new(Size::new(20, 10), &Theme::default());
         // 20 lines, each wider than the interior (18): both axes overflow.
         let line = "abcdefghijklmnopqrstuvwxyz";
-        ed.editor.set_text(
+        ed.active_editor_mut().set_text(
             &std::iter::repeat(line)
                 .take(20)
                 .collect::<Vec<_>>()
@@ -880,7 +960,7 @@ mod tests {
         let ed = EditorApp::new(Size::new(30, 10), &Theme::default());
         // Desktop region is rows 1..9 (8 tall); the editor sits one cell inside it.
         assert_eq!(
-            ed.editor.bounds(),
+            ed.active_editor().bounds(),
             inset1(regions(Size::new(30, 10)).desktop)
         );
     }
@@ -889,9 +969,9 @@ mod tests {
     fn new_file_clears_the_document_and_path() {
         let mut ed = app();
         keydown(&mut ed, KeyCode::Char('z'), Modifiers::NONE);
-        ed.path = Some(PathBuf::from("/tmp/whatever.txt"));
+        ed.documents[ed.active].path = Some(PathBuf::from("/tmp/whatever.txt"));
         ed.new_file();
-        assert_eq!(ed.editor.text(), "");
+        assert_eq!(ed.active_editor().text(), "");
         assert!(ed.path().is_none());
         assert!(!ed.is_modified());
     }
@@ -904,7 +984,7 @@ mod tests {
         let mut ed = app();
         let lossy = ed.open_file(&path).unwrap();
         assert!(!lossy);
-        assert_eq!(ed.editor.text(), "one\ntwo\n");
+        assert_eq!(ed.active_editor().text(), "one\ntwo\n");
         assert_eq!(ed.path(), Some(path.as_path()));
         assert!(!ed.is_modified(), "a freshly opened file is clean");
 
