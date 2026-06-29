@@ -12,7 +12,7 @@ use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
 use crate::command::Command;
-use crate::event::{Event, EventResult, KeyCode};
+use crate::event::{Event, EventResult, KeyCode, MouseButton, MouseKind};
 use crate::geometry::{Point, Rect};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, View};
@@ -87,14 +87,22 @@ impl View for Button {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        if let Event::Key(key) = event {
-            if self.focused && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-                // Gated by Context: a disabled command never fires (ADR 0003).
+        match event {
+            // Gated by Context: a disabled command never fires (ADR 0003).
+            Event::Key(key)
+                if self.focused && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) =>
+            {
                 ctx.post(self.command);
-                return EventResult::Consumed;
+                EventResult::Consumed
             }
+            // A click on the button activates it (the group routes it here only when
+            // the press lands on the button, and focuses it first).
+            Event::Mouse(m) if matches!(m.kind, MouseKind::Down(MouseButton::Left)) => {
+                ctx.post(self.command);
+                EventResult::Consumed
+            }
+            _ => EventResult::Ignored,
         }
-        EventResult::Ignored
     }
 
     fn focusable(&self) -> bool {
@@ -111,7 +119,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::command::{CM_OK, CM_USER, CommandSet};
-    use crate::event::{KeyEvent, Modifiers};
+    use crate::event::{KeyEvent, Modifiers, MouseEvent};
     use crate::geometry::Size;
 
     const CM_APPLY: Command = Command(CM_USER + 1);
@@ -126,6 +134,26 @@ mod tests {
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, Modifiers::NONE))
+    }
+
+    fn click(x: i16, y: i16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn clicking_the_button_posts_its_command() {
+        let mut b = button(); // not pre-focused: the group focuses on click
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        assert_eq!(
+            b.handle_event(&click(3, 0), &mut ctx),
+            EventResult::Consumed
+        );
+        assert_eq!(ctx.posted(), &[Event::Command(CM_OK)]);
     }
 
     #[test]

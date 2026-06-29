@@ -337,8 +337,15 @@ interaction, window move/resize by drag, drag-select in the editor.
   `zoom_span` so the hit-test matches what is drawn; grabbing a maximised window
   un-zooms it first. *Still deferred:* dragging a scroll-bar thumb (needs a
   `Drag::ScrollThumb` variant inverting `thumb_offset`).
-- **9e** Dialog controls — `Button`, `InputLine`, `CheckBox`, `RadioButtons`,
-  `ListViewer`, `ScrollBar` clicks.
+- **9e** Dialog controls.
+  - **9e.1 ✅** Focus-on-click + activate controls — `Group::dispatch_positional`
+    now focuses the clicked focusable child (TV click-to-focus, via a shared
+    `set_focus`); `Button` activates on a click, `CheckBox` toggles, and
+    `RadioButtons` selects the clicked row. `exec_view` already delivers mouse to
+    a modal in dialog-local coordinates, so these work in any `Dialog`.
+  - **9e.2** Text + list controls — `InputLine` click-to-place-caret, `ListBox`/
+    `ListViewer` click-to-select + wheel/scroll-bar; the editor's own modal
+    dialogs (`GoToLine`/`Find`/`Replace`) route mouse to their controls.
 
 ---
 

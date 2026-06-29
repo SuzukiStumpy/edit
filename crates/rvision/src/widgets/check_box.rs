@@ -7,7 +7,7 @@
 use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
-use crate::event::{Event, EventResult, KeyCode};
+use crate::event::{Event, EventResult, KeyCode, MouseButton, MouseKind};
 use crate::geometry::{Point, Rect};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, View};
@@ -65,11 +65,14 @@ impl View for CheckBox {
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &mut Context) -> EventResult {
-        if let Event::Key(key) = event {
-            if self.focused && key.code == KeyCode::Char(' ') {
-                self.checked = !self.checked;
-                return EventResult::Consumed;
-            }
+        let toggle = match event {
+            Event::Key(key) => self.focused && key.code == KeyCode::Char(' '),
+            Event::Mouse(m) => matches!(m.kind, MouseKind::Down(MouseButton::Left)),
+            _ => false,
+        };
+        if toggle {
+            self.checked = !self.checked;
+            return EventResult::Consumed;
         }
         EventResult::Ignored
     }
@@ -88,7 +91,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::command::CommandSet;
-    use crate::event::{KeyEvent, Modifiers};
+    use crate::event::{KeyEvent, Modifiers, MouseEvent};
     use crate::geometry::Size;
 
     fn rect(w: i16) -> Rect {
@@ -103,6 +106,20 @@ mod tests {
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
         c.handle_event(&Event::Key(KeyEvent::new(code, Modifiers::NONE)), &mut ctx)
+    }
+
+    #[test]
+    fn clicking_toggles_even_when_unfocused() {
+        let mut c = check(12); // the group focuses it on click; the click also toggles
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(1, 0),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(c.handle_event(&click, &mut ctx), EventResult::Consumed);
+        assert!(c.is_checked());
     }
 
     #[test]

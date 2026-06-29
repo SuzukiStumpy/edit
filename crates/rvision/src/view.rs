@@ -15,7 +15,7 @@
 use crate::canvas::Canvas;
 use crate::color::Style;
 use crate::command::{Command, CommandSet};
-use crate::event::{Event, EventResult, KeyCode, MouseEvent};
+use crate::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use crate::geometry::{Point, Rect, Size};
 
 /// One node of the UI tree.
@@ -186,19 +186,38 @@ impl Group {
     }
 
     /// Positional phase: deliver to the topmost child under the pointer, with the
-    /// position translated into that child's local coordinates (ADR 0004).
+    /// position translated into that child's local coordinates (ADR 0004). A
+    /// left-press first moves focus to the clicked child if it can take it, so
+    /// clicking a control focuses it the way TurboVision does.
     fn dispatch_positional(&mut self, mouse: MouseEvent, ctx: &mut Context) -> EventResult {
-        for child in self.children.iter_mut().rev() {
-            let bounds = child.bounds();
+        for i in (0..self.children.len()).rev() {
+            let bounds = self.children[i].bounds();
             if bounds.contains(mouse.pos) {
+                if matches!(mouse.kind, MouseKind::Down(MouseButton::Left))
+                    && self.children[i].focusable()
+                {
+                    self.set_focus(i);
+                }
                 let local = MouseEvent {
                     pos: mouse.pos.offset(-bounds.origin().x, -bounds.origin().y),
                     ..mouse
                 };
-                return child.handle_event(&Event::Mouse(local), ctx);
+                return self.children[i].handle_event(&Event::Mouse(local), ctx);
             }
         }
         EventResult::Ignored
+    }
+
+    /// Moves focus to child `index`, telling the old and new children (defaulted
+    /// no-ops unless they draw themselves focused, ADR 0017).
+    fn set_focus(&mut self, index: usize) {
+        if self.focused != Some(index) {
+            if let Some(old) = self.focused {
+                self.children[old].set_focused(false);
+            }
+            self.children[index].set_focused(true);
+            self.focused = Some(index);
+        }
     }
 
     /// Focused phase: the focused child gets first crack; if it ignores a
@@ -251,14 +270,7 @@ impl Group {
             None if forward => 0,
             None => len - 1,
         };
-        let next_index = focusable[next];
-        if self.focused != Some(next_index) {
-            if let Some(old) = self.focused {
-                self.children[old].set_focused(false);
-            }
-            self.children[next_index].set_focused(true);
-            self.focused = Some(next_index);
-        }
+        self.set_focus(focusable[next]);
         EventResult::Consumed
     }
 }
@@ -460,6 +472,43 @@ mod tests {
         let result = group.handle_event(&mouse_down_at(15, 8), &mut ctx);
         assert_eq!(result, EventResult::Ignored);
         assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_left_press_focuses_the_clicked_focusable_child() {
+        let log: Log = Log::default();
+        let mut group = Group::new(
+            rect(0, 0, 20, 10),
+            vec![
+                Probe::new(1, rect(1, 1, 5, 5), true, &log).boxed(),
+                Probe::new(2, rect(10, 1, 5, 5), true, &log).boxed(),
+            ],
+        );
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+
+        group.handle_event(&mouse_down_at(11, 2), &mut ctx); // inside child 2
+        assert_eq!(group.focused(), Some(1));
+        group.handle_event(&mouse_down_at(2, 2), &mut ctx); // inside child 1
+        assert_eq!(group.focused(), Some(0));
+    }
+
+    #[test]
+    fn a_press_on_a_non_focusable_child_leaves_focus_alone() {
+        let log: Log = Log::default();
+        let mut group = Group::new(
+            rect(0, 0, 20, 10),
+            vec![
+                Probe::new(1, rect(1, 1, 5, 5), true, &log).boxed(),
+                Probe::new(2, rect(10, 1, 5, 5), false, &log).boxed(),
+            ],
+        );
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        group.handle_event(&mouse_down_at(2, 2), &mut ctx); // focus the focusable child 1
+        assert_eq!(group.focused(), Some(0));
+        group.handle_event(&mouse_down_at(11, 2), &mut ctx); // click the non-focusable child 2
+        assert_eq!(group.focused(), Some(0), "focus stays on child 1");
     }
 
     // --- Focus traversal ---

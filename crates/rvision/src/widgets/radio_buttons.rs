@@ -8,7 +8,7 @@
 use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
-use crate::event::{Event, EventResult, KeyCode};
+use crate::event::{Event, EventResult, KeyCode, MouseButton, MouseKind};
 use crate::geometry::{Point, Rect};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, View};
@@ -75,24 +75,30 @@ impl View for RadioButtons {
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &mut Context) -> EventResult {
-        if let Event::Key(key) = event {
-            if self.focused {
-                match key.code {
-                    KeyCode::Up => {
-                        self.selected = self.selected.saturating_sub(1);
-                        return EventResult::Consumed;
-                    }
-                    KeyCode::Down => {
-                        if self.selected + 1 < self.labels.len() {
-                            self.selected += 1;
-                        }
-                        return EventResult::Consumed;
-                    }
-                    _ => {}
+        match event {
+            Event::Key(key) if self.focused => match key.code {
+                KeyCode::Up => {
+                    self.selected = self.selected.saturating_sub(1);
+                    EventResult::Consumed
                 }
+                KeyCode::Down => {
+                    if self.selected + 1 < self.labels.len() {
+                        self.selected += 1;
+                    }
+                    EventResult::Consumed
+                }
+                _ => EventResult::Ignored,
+            },
+            // A click selects the option on the clicked row.
+            Event::Mouse(m) if matches!(m.kind, MouseKind::Down(MouseButton::Left)) => {
+                let row = m.pos.y;
+                if row >= 0 && (row as usize) < self.labels.len() {
+                    self.selected = row as usize;
+                }
+                EventResult::Consumed
             }
+            _ => EventResult::Ignored,
         }
-        EventResult::Ignored
     }
 
     fn focusable(&self) -> bool {
@@ -109,7 +115,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::command::CommandSet;
-    use crate::event::{KeyEvent, Modifiers};
+    use crate::event::{KeyEvent, Modifiers, MouseEvent};
     use crate::geometry::Size;
 
     fn radio() -> RadioButtons {
@@ -124,6 +130,20 @@ mod tests {
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
         r.handle_event(&Event::Key(KeyEvent::new(code, Modifiers::NONE)), &mut ctx)
+    }
+
+    #[test]
+    fn clicking_a_row_selects_that_option() {
+        let mut r = radio();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(3, 2), // the third row ("Mac")
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(r.handle_event(&click, &mut ctx), EventResult::Consumed);
+        assert_eq!(r.selected(), 2);
     }
 
     #[test]
