@@ -620,10 +620,17 @@ impl EditorApp {
 
     // --- event dispatch ---
 
-    /// Routes a mouse event. Phase 9a: a left-click on a window focuses it (and a
-    /// click on the active window keeps it active); clicks over bare desktop or
-    /// outside it are ignored. Later sub-phases add menu/scrollbar/drag behaviour.
-    fn handle_mouse(&mut self, mouse: &MouseEvent, _ctx: &mut Context) -> EventResult {
+    /// Routes a mouse event through the local passes. The menu bar gets first
+    /// refusal whenever a pull-down is open (it is modal, ADR 0016) or the pointer
+    /// is on its row, so clicks open/choose/dismiss menus; otherwise a left-click on
+    /// a window focuses it. Clicks over bare desktop are ignored. Later sub-phases
+    /// add scrollbar/drag/editor behaviour.
+    fn handle_mouse(&mut self, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
+        if (self.menu_bar.is_open() || regions(self.size).menu.contains(mouse.pos))
+            && self.menu_bar.handle_event(&Event::Mouse(*mouse), ctx) == EventResult::Consumed
+        {
+            return EventResult::Consumed;
+        }
         if let MouseKind::Down(MouseButton::Left) = mouse.kind {
             if let Some(i) = self.window_at(mouse.pos) {
                 if i != self.active {
@@ -1657,5 +1664,33 @@ mod tests {
         let before = ed.active_index();
         left_click(&mut ed, 5, 0); // a bare stretch of the menu-bar row
         assert_eq!(ed.active_index(), before);
+    }
+
+    // --- mouse: menu bar (Phase 9b) ---
+
+    #[test]
+    fn clicking_a_menu_title_opens_the_pulldown() {
+        let mut ed = app();
+        assert!(!ed.menu_is_open());
+        left_click(&mut ed, 1, 0); // the File title
+        assert!(ed.menu_is_open());
+    }
+
+    #[test]
+    fn clicking_a_menu_item_posts_its_command() {
+        let mut ed = app();
+        left_click(&mut ed, 1, 0); // open File (New is the first item)
+        let posted = left_click(&mut ed, 3, 3); // click an item row
+        assert!(!ed.menu_is_open());
+        assert!(!posted.is_empty(), "choosing an item posts its command");
+    }
+
+    #[test]
+    fn clicking_the_editor_while_a_menu_is_open_dismisses_it() {
+        let mut ed = app();
+        left_click(&mut ed, 1, 0); // open File
+        assert!(ed.menu_is_open());
+        left_click(&mut ed, 5, 5); // click down in the editor
+        assert!(!ed.menu_is_open(), "the click-away closes the menu");
     }
 }

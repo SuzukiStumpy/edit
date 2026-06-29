@@ -11,7 +11,7 @@ use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
 use crate::command::Command;
-use crate::event::{Event, EventResult, KeyCode, Modifiers};
+use crate::event::{Event, EventResult, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::{Role, Theme};
 use crate::view::{Context, View};
@@ -118,6 +118,38 @@ impl MenuBar {
         xs
     }
 
+    /// The menu whose title (with its one-space padding) sits under bar column `x`,
+    /// or `None` for an empty stretch of the bar. Matches the highlighted ` Title `
+    /// region drawn by [`draw`](Self::draw).
+    fn title_at(&self, x: i16) -> Option<usize> {
+        let starts = self.title_starts();
+        self.menus.iter().enumerate().find_map(|(i, menu)| {
+            let start = starts[i];
+            let len = menu.title.chars().count() as i16;
+            (x >= start - 1 && x <= start + len).then_some(i)
+        })
+    }
+
+    /// The item under `pos` (screen coordinates) when a pull-down is open, or `None`
+    /// if `pos` is outside the open box. Uses the same [`pulldown_area`](Self::pulldown_area)
+    /// the overlay draws, so a click lands on exactly the row it looks like.
+    fn item_at(&self, pos: Point) -> Option<usize> {
+        let (index, menu) = self.open_menu_ref()?;
+        if menu.items.is_empty() {
+            return None;
+        }
+        let area = self.pulldown_area(index, menu, self.bounds.width());
+        let left = area.origin().x;
+        let box_w = area.width();
+        // Interior only: exclude the border columns and the top/bottom border rows.
+        if pos.x <= left || pos.x >= left + box_w - 1 {
+            return None;
+        }
+        let first_row = area.origin().y + 1; // box top + 1 border row
+        let row = pos.y - first_row;
+        (row >= 0 && (row as usize) < menu.items.len()).then_some(row as usize)
+    }
+
     /// Opens menu `index` (clamped), resetting the highlight to its first item.
     fn open_menu(&mut self, index: usize) {
         if index < self.menus.len() {
@@ -175,6 +207,78 @@ impl MenuBar {
         }
     }
 
+    /// The pull-down box (border included) for the open menu `index`, in the same
+    /// screen coordinates the overlay draws in: anchored a row below the bar, its
+    /// left edge under the title but pulled back so the box stays on screen. The
+    /// single source of the box geometry, shared by [`draw_overlay`](Self::draw_overlay)
+    /// and mouse hit-testing.
+    fn pulldown_area(&self, index: usize, menu: &Menu, screen_w: i16) -> Rect {
+        let starts = self.title_starts();
+        let box_w = self.pulldown_width(menu);
+        let box_h = menu.items.len() as i16 + 2;
+        let left = (starts[index] - 1).min(screen_w - box_w).max(0);
+        Rect::from_origin_size(Point::new(left, 1), Size::new(box_w, box_h))
+    }
+
+    /// Routes a mouse event (positions in screen coordinates, the same space the
+    /// bar and its overlay draw in — the bar sits on row `bounds.y`, the pull-down
+    /// the rows below). Clicking a title opens it (or toggles it shut); clicking a
+    /// pull-down item chooses it; clicking anywhere else dismisses an open menu.
+    /// While open, moving over a title or item tracks the highlight (TV feel).
+    fn handle_mouse(&mut self, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
+        let on_bar = mouse.pos.y == self.bounds.origin().y;
+        match mouse.kind {
+            MouseKind::Down(MouseButton::Left) => {
+                if on_bar {
+                    return match self.title_at(mouse.pos.x) {
+                        Some(i) if self.open == Some(i) => {
+                            self.close(); // a second click on the open title shuts it
+                            EventResult::Consumed
+                        }
+                        Some(i) => {
+                            self.open_menu(i);
+                            EventResult::Consumed
+                        }
+                        // Bare stretch of the bar: dismiss any open pull-down.
+                        None if self.is_open() => {
+                            self.close();
+                            EventResult::Consumed
+                        }
+                        None => EventResult::Ignored,
+                    };
+                }
+                if self.is_open() {
+                    if let Some(item) = self.item_at(mouse.pos) {
+                        let command = self.menus[self.open.unwrap()].items[item].command;
+                        self.close();
+                        ctx.post(command); // Context-gated: a disabled item posts nothing
+                    } else {
+                        self.close(); // click off the box dismisses it
+                    }
+                    return EventResult::Consumed;
+                }
+                EventResult::Ignored
+            }
+            MouseKind::Moved | MouseKind::Drag(MouseButton::Left) if self.is_open() => {
+                if let Some(item) = self.item_at(mouse.pos) {
+                    self.highlight = item;
+                    EventResult::Consumed
+                } else if on_bar {
+                    if let Some(i) = self.title_at(mouse.pos.x) {
+                        if self.open != Some(i) {
+                            self.open_menu(i); // slide across the bar with the button down
+                        }
+                        return EventResult::Consumed;
+                    }
+                    EventResult::Ignored
+                } else {
+                    EventResult::Ignored
+                }
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
     /// Draws an open pull-down over the whole frame. The shell calls this after
     /// everything else so the box sits on top (ADR 0016); a closed bar draws
     /// nothing.
@@ -185,12 +289,9 @@ impl MenuBar {
         if menu.items.is_empty() {
             return;
         }
-        let starts = self.title_starts();
-        let box_w = self.pulldown_width(menu);
-        let box_h = menu.items.len() as i16 + 2;
-        let screen_w = canvas.size().width;
-        let left = (starts[index] - 1).min(screen_w - box_w).max(0);
-        let area = Rect::from_origin_size(Point::new(left, 1), Size::new(box_w, box_h));
+        let area = self.pulldown_area(index, menu, canvas.size().width);
+        let left = area.origin().x;
+        let box_w = area.width();
 
         canvas.fill(area, &Cell::blank(self.bar_style));
         canvas.draw_box(area, self.bar_style);
@@ -254,13 +355,11 @@ impl View for MenuBar {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        let Event::Key(key) = event else {
-            return EventResult::Ignored;
-        };
-        if self.is_open() {
-            self.handle_open(key.code, ctx)
-        } else {
-            self.handle_closed(key.code, key.modifiers)
+        match event {
+            Event::Key(key) if self.is_open() => self.handle_open(key.code, ctx),
+            Event::Key(key) => self.handle_closed(key.code, key.modifiers),
+            Event::Mouse(mouse) => self.handle_mouse(mouse, ctx),
+            _ => EventResult::Ignored,
         }
     }
 }
@@ -464,5 +563,111 @@ mod tests {
         let r = bar.handle_event(&key(KeyCode::Char('z'), Modifiers::NONE), &mut ctx);
         assert_eq!(r, EventResult::Consumed);
         assert!(bar.is_open());
+    }
+
+    // --- Mouse (Phase 9b) ---
+    //
+    // Layout of `bar()`: titles `File` (cols 0..=5) and `Edit` (cols 6..=11) on
+    // row 0; the File pull-down is a 19-wide box at (0, 1), items `New` on row 2
+    // and `Open...` on row 3.
+
+    fn click(x: i16, y: i16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn clicking_a_title_opens_that_menu() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = bar.handle_event(&click(7, 0), &mut ctx); // the Edit title
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(bar.open, Some(1));
+    }
+
+    #[test]
+    fn clicking_the_open_title_again_closes_it() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&click(1, 0), &mut ctx); // open File
+        assert_eq!(bar.open, Some(0));
+        bar.handle_event(&click(1, 0), &mut ctx); // click it again
+        assert!(!bar.is_open());
+    }
+
+    #[test]
+    fn clicking_another_title_switches_menus() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&click(1, 0), &mut ctx); // File
+        bar.handle_event(&click(7, 0), &mut ctx); // Edit
+        assert_eq!(bar.open, Some(1));
+    }
+
+    #[test]
+    fn clicking_an_item_posts_its_command_and_closes() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&click(1, 0), &mut ctx); // open File
+        let r = bar.handle_event(&click(3, 3), &mut ctx); // the Open... row
+        assert_eq!(r, EventResult::Consumed);
+        assert!(!bar.is_open());
+        assert_eq!(ctx.posted(), &[Event::Command(CM_OPEN)]);
+    }
+
+    #[test]
+    fn clicking_off_an_open_pulldown_dismisses_it() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&click(1, 0), &mut ctx); // open File
+        let r = bar.handle_event(&click(30, 5), &mut ctx); // empty desktop below
+        assert_eq!(r, EventResult::Consumed);
+        assert!(!bar.is_open());
+        assert!(ctx.posted().is_empty());
+    }
+
+    #[test]
+    fn clicking_a_disabled_item_posts_nothing_but_closes() {
+        let mut bar = bar();
+        let mut cs = CommandSet::new();
+        cs.disable(CM_NEW);
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&click(1, 0), &mut ctx); // open File
+        bar.handle_event(&click(3, 2), &mut ctx); // the New row (disabled)
+        assert!(!bar.is_open());
+        assert!(ctx.posted().is_empty());
+    }
+
+    #[test]
+    fn clicking_a_bare_part_of_a_closed_bar_is_ignored() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = bar.handle_event(&click(20, 0), &mut ctx); // past the last title
+        assert_eq!(r, EventResult::Ignored);
+        assert!(!bar.is_open());
+    }
+
+    #[test]
+    fn moving_over_an_item_tracks_the_highlight() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&click(1, 0), &mut ctx); // open File, highlight = 0
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseKind::Moved,
+            pos: Point::new(3, 3), // hover the Open... row
+            modifiers: Modifiers::NONE,
+        });
+        bar.handle_event(&moved, &mut ctx);
+        assert_eq!(bar.highlight, 1);
     }
 }

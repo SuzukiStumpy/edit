@@ -306,8 +306,13 @@ interaction, window move/resize by drag, drag-select in the editor.
   screen; `EditorApp::dispatch` routes `Event::Mouse` instead of dropping it. A
   left-click focuses the window under the pointer (`window_at` hit-tests
   front-to-back in `draw_order`); clicks over bare desktop are ignored.
-- **9b** Menu mouse — click the menu bar to open a pull-down, click an item to
-  choose it, click-out to close (`rvision` `MenuBar`/`Menu`).
+- **9b ✅** Menu mouse — `MenuBar::handle_event` now answers `Event::Mouse`:
+  clicking a title opens it (toggling shut on a second click, switching on a
+  click to another title), clicking a pull-down item chooses it (Context-gated,
+  so disabled items still post nothing), clicking anywhere off an open menu
+  dismisses it, and moving over an item tracks the highlight. A shared
+  `pulldown_area` keeps the drawn box and the hit-test from drifting. `EditorApp`
+  gives the bar first refusal whenever it is open or the pointer is on its row.
 - **9c** Editor mouse — click to place the caret, drag to select, wheel to
   scroll, click the window scroll bars.
 - **9d** Window chrome drag — title-bar drag to move, border/corner to resize,
