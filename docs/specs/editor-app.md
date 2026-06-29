@@ -19,14 +19,16 @@ For MDI (ADR 0009) the app owns a `Vec<Document>` with an active index — each
 `Document` bundles an `EditorView`, the file path, and its [`Encoding`]. They are
 held **concretely**, not as `rvision::Window`/`Box<dyn View>`, so file/edit ops
 reach the editor with no downcast (ADR 0018); this is why the editor does not
-reuse `rvision::Desktop`. Through Phase 8a all windows are maximised, so only the
-active one is drawn; Phase 8b adds the overlapping/cascade/tile/zoom layout.
+reuse `rvision::Desktop`. Each `Document` also carries a `normal` rectangle
+(desktop-local); an app-level `zoomed` flag maximises the active window over the
+desktop. A fresh app starts zoomed, so the single-window look matches Phase 6/7.
 
 ## Public interface
 
 ```rust
 pub const CM_NEW / CM_OPEN / CM_SAVE / CM_SAVE_AS: Command;   // CM_QUIT is rvision's
-pub const CM_CLOSE / CM_NEXT_WINDOW / CM_PREV_WINDOW: Command; // Window menu (8a.2)
+pub const CM_CLOSE / CM_NEXT_WINDOW / CM_PREV_WINDOW: Command;        // Window menu (8a.2)
+pub const CM_CASCADE / CM_TILE / CM_ZOOM: Command;                    // Window menu (8b)
 
 struct Document { editor: EditorView, path: Option<PathBuf>, encoding: Encoding } // private
 pub struct EditorApp { /* menu_bar, status_line, documents: Vec<Document>, active, ... */ }
@@ -41,6 +43,8 @@ impl EditorApp {
     pub fn activate(&mut self, index: usize);             // Alt+1…9
     pub fn next_window(&mut self); pub fn prev_window(&mut self);  // F6 / Shift-F6
     pub fn remove_active_window(&mut self);               // Close (last → fresh Untitled)
+    pub fn toggle_zoom(&mut self);                        // Zoom / F5
+    pub fn cascade(&mut self); pub fn tile(&mut self);    // Cascade / Tile
     // terminal-free file ops on the active document (unit-tested):
     pub fn new_file(&mut self);
     pub fn open_file(&mut self, path) -> io::Result<bool>;   // bool = decoded lossily
@@ -77,6 +81,14 @@ pub fn run<T: Backend + EventSource>(app: Application<T>, ed: EditorApp, theme: 
   menu still swallows those keys. Close (Window menu or Alt-F3) posts `CM_CLOSE`
   so the driver can run the discard guard first; closing the last window resets it
   to a fresh Untitled rather than removing it.
+- **Layout (Phase 8b):** `draw_canvas` paints the backdrop, then the windows
+  bottom-to-top — inactive first, the active one last with the doubled frame — each
+  with its own scroll bars. A zoomed active window covers the desktop, so only it is
+  drawn. `sync_layout` resizes every editor's bounds to its window interior after
+  any change to the active window, zoom, sizes, or terminal size, so viewport and
+  scroll metrics stay correct. Cascade steps `normal` rects down-right from the
+  top-left; Tile fills the desktop with a roughly square grid (last row stretched);
+  Zoom (F5) toggles `zoomed`. Window drag/resize is Phase 9 (mouse).
 - **Discard guard:** Close on a modified window, and Exit on *any* modified window
   (`confirm_discard_all` walks every window), prompt Yes/No/Cancel; Save with no
   path falls through to Save As; an I/O error shows a message box.

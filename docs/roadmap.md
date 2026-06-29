@@ -269,7 +269,7 @@ single-document editor with menus, a status line, and modal Open/Save dialogs.
 
 ---
 
-## Phase 8 — MDI (multi-window)
+## Phase 8 — MDI (multi-window) ✅
 
 Multiple editor windows on the desktop; the Window menu; next/prev, cascade,
 tile, zoom, close; Alt+1…9 to switch (ADR 0009). `edit::app` owns its documents
@@ -278,17 +278,20 @@ tile, zoom, close; Alt+1…9 to switch (ADR 0009). `edit::app` owns its document
 `Document` bundles an `EditorView` + path + `Encoding`, and `EditorApp` holds a
 `Vec<Document>` with an active index, drawing each as its own framed window.
 
-- **8a.1** Multi-document model — `EditorApp` owns `Vec<Document>` + an active
+- **8a.1 ✅** Multi-document model — `EditorApp` owns `Vec<Document>` + an active
   index instead of a single editor; a `Document` carries the editor, path, and
   encoding. Pure refactor: one document, still maximised, behaviour unchanged.
-- **8a.2** Switching + Window menu — New/Open spawn a new window (not replace);
+- **8a.2 ✅** Switching + Window menu — New/Open spawn a new window (not replace);
   Alt+1…9, Next (F6) / Previous (Shift-F6) cycle the active document; a Window
   menu (Next/Previous/Close); Close removes the active document (discard guard;
   closing the last leaves a fresh Untitled); Exit confirms *every* dirty document.
   Windows are still drawn maximised — only the active one shows.
-- **8b** Overlapping windows — draw all documents as stacked, offset windows on
-  the desktop (active frame doubled, drawn last); cascade / tile / zoom (maximise
-  toggle) layout commands. Drag/resize is Phase 9 (mouse).
+- **8b ✅** Overlapping windows — each `Document` carries a `normal` rect
+  (desktop-local); an app-level `zoomed` flag maximises the active window (a fresh
+  app starts zoomed, so the single-window look is unchanged). Windows draw stacked
+  (inactive first, active last with the doubled frame), each with its own scroll
+  bars; Cascade / Tile recompute the slots, Zoom (F5) toggles maximise. Drag/resize
+  is Phase 9 (mouse).
 
 ---
 

@@ -50,6 +50,12 @@ pub const CM_CLOSE: Command = Command(CM_USER + 30);
 pub const CM_NEXT_WINDOW: Command = Command(CM_USER + 31);
 /// Window ▸ Previous — activate the previous window (also Shift-F6).
 pub const CM_PREV_WINDOW: Command = Command(CM_USER + 32);
+/// Window ▸ Cascade — stack the windows diagonally.
+pub const CM_CASCADE: Command = Command(CM_USER + 33);
+/// Window ▸ Tile — lay the windows out in a grid.
+pub const CM_TILE: Command = Command(CM_USER + 34);
+/// Window ▸ Zoom — maximise/restore the active window (also F5).
+pub const CM_ZOOM: Command = Command(CM_USER + 35);
 
 /// One open document: its editor view, the file's path, and the [`Encoding`] to
 /// preserve on save (ADR 0010). `EditorApp` owns a `Vec<Document>` for MDI
@@ -61,11 +67,15 @@ struct Document {
     path: Option<PathBuf>,
     /// The encoding to preserve on save (ADR 0010).
     encoding: Encoding,
+    /// The window's un-zoomed rectangle in **desktop-local** coordinates (Phase
+    /// 8b). The effective rect is this, unless the window is the zoomed active one,
+    /// in which case it fills the desktop.
+    normal: Rect,
 }
 
 impl Document {
-    /// A new, empty, unsaved document with a focused editor (bounds are set on the
-    /// next relayout).
+    /// A new, empty, unsaved document with a focused editor. Its window rectangle
+    /// (`normal`) and editor bounds are assigned by the owning [`EditorApp`].
     fn new(theme: &Theme) -> Self {
         let mut editor = EditorView::new(Rect::default(), theme);
         editor.set_focused(true);
@@ -73,6 +83,7 @@ impl Document {
             editor,
             path: None,
             encoding: Encoding::new_file(),
+            normal: Rect::default(),
         }
     }
 
@@ -117,6 +128,9 @@ pub struct EditorApp {
     documents: Vec<Document>,
     /// Index into `documents` of the active (focused, topmost) window.
     active: usize,
+    /// Whether the active window is maximised over the whole desktop (Phase 8b).
+    /// A fresh app starts zoomed, matching the single-window look of Phase 8a.
+    zoomed: bool,
     size: Size,
     /// The internal clipboard for Cut/Copy/Paste (ADR 0019; OSC 52 is Phase 10).
     clipboard: String,
@@ -149,6 +163,37 @@ fn inset1(rect: Rect) -> Rect {
     Rect::from_origin_size(
         rect.origin().offset(1, 1),
         Size::new((width - 2).max(0), (height - 2).max(0)),
+    )
+}
+
+/// The smallest window that still has a usable interior (a 1-cell border plus at
+/// least one interior cell).
+const MIN_WINDOW: Size = Size::new(3, 3);
+
+/// `rect` clamped to fit within a `bounds`-sized area at the origin: the size is
+/// capped and the origin pulled back so the rectangle stays fully on the desktop.
+fn clamp_rect(rect: Rect, bounds: Size) -> Rect {
+    let w = rect.width().clamp(0, bounds.width.max(0));
+    let h = rect.height().clamp(0, bounds.height.max(0));
+    let x = rect.origin().x.clamp(0, (bounds.width - w).max(0));
+    let y = rect.origin().y.clamp(0, (bounds.height - h).max(0));
+    Rect::from_origin_size(Point::new(x, y), Size::new(w, h))
+}
+
+/// A cascade slot (desktop-local) for the `i`-th window on a `desktop`-sized area:
+/// stepped down-right from the top-left and extending to the bottom-right corner,
+/// so window 0 fills the desktop and later windows peek out behind it. The step
+/// wraps so a long stack never marches off-screen.
+fn cascade_slot(desktop: Size, i: usize) -> Rect {
+    let step = (i % 8) as i16;
+    let x = (step * 2).min((desktop.width - MIN_WINDOW.width).max(0));
+    let y = step.min((desktop.height - MIN_WINDOW.height).max(0));
+    clamp_rect(
+        Rect::from_origin_size(
+            Point::new(x, y),
+            Size::new(desktop.width - x, desktop.height - y),
+        ),
+        desktop,
     )
 }
 
@@ -193,6 +238,9 @@ impl EditorApp {
                     vec![
                         MenuItem::new("Next", CM_NEXT_WINDOW).with_shortcut("F6"),
                         MenuItem::new("Previous", CM_PREV_WINDOW).with_shortcut("Shift-F6"),
+                        MenuItem::new("Zoom", CM_ZOOM).with_shortcut("F5"),
+                        MenuItem::new("Cascade", CM_CASCADE),
+                        MenuItem::new("Tile", CM_TILE),
                         MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
                     ],
                 ),
@@ -223,8 +271,9 @@ impl EditorApp {
         let mut app = Self {
             menu_bar,
             status_line,
-            documents: vec![Document::new(theme)],
+            documents: Vec::new(),
             active: 0,
+            zoomed: true,
             size,
             clipboard: String::new(),
             finished: false,
@@ -232,20 +281,57 @@ impl EditorApp {
             title_style: theme.style(Role::WindowTitle),
             backdrop: Cell::from_char('░', theme.style(Role::DesktopBackground)),
         };
-        app.relayout(size);
+        app.add_document(Document::new(theme));
         app
     }
 
-    /// Repositions the chrome and the editors for a terminal of `size`. Every
-    /// document is currently maximised, so they share the one interior rectangle.
+    /// Repositions the chrome and the editors for a terminal of `size`, clamping
+    /// each window's rectangle to fit the new desktop and re-syncing editor bounds.
     pub fn relayout(&mut self, size: Size) {
         self.size = size;
         let r = regions(size);
         self.menu_bar.set_bounds(r.menu);
         self.status_line.set_bounds(r.status);
-        let interior = inset1(r.desktop);
+        let ds = r.desktop.size();
         for doc in &mut self.documents {
-            doc.editor.set_bounds(interior);
+            doc.normal = clamp_rect(doc.normal, ds);
+        }
+        self.sync_layout();
+    }
+
+    /// The desktop area (screen coordinates) the windows live in.
+    fn desktop(&self) -> Rect {
+        regions(self.size).desktop
+    }
+
+    /// Window `i`'s effective rectangle in **desktop-local** coordinates: its
+    /// `normal` rect, unless it is the zoomed active window, which fills the
+    /// desktop. Always clamped to the desktop.
+    fn window_rect_local(&self, i: usize) -> Rect {
+        let ds = self.desktop().size();
+        if self.zoomed && i == self.active {
+            Rect::from_origin_size(Point::new(0, 0), ds)
+        } else {
+            clamp_rect(self.documents[i].normal, ds)
+        }
+    }
+
+    /// Sets every editor's bounds to its window's interior (screen coordinates), so
+    /// viewport size and scroll metrics track the current layout. Call after any
+    /// change to the active window, zoom, sizes, or the terminal size.
+    fn sync_layout(&mut self) {
+        let desktop = self.desktop();
+        let ds = desktop.size();
+        let origin = desktop.origin();
+        for i in 0..self.documents.len() {
+            let local = if self.zoomed && i == self.active {
+                Rect::from_origin_size(Point::new(0, 0), ds)
+            } else {
+                clamp_rect(self.documents[i].normal, ds)
+            };
+            let screen =
+                Rect::from_origin_size(local.origin().offset(origin.x, origin.y), local.size());
+            self.documents[i].editor.set_bounds(inset1(screen));
         }
     }
 
@@ -312,12 +398,13 @@ impl EditorApp {
         self.active
     }
 
-    /// Pushes `doc` as a new window on top and makes it active, sizing its editor
-    /// to the (currently maximised) interior.
+    /// Pushes `doc` as a new window on top and makes it active, giving it a fresh
+    /// cascade slot and re-syncing editor bounds.
     fn add_document(&mut self, mut doc: Document) {
-        doc.editor.set_bounds(inset1(regions(self.size).desktop));
+        doc.normal = cascade_slot(self.desktop().size(), self.documents.len());
         self.documents.push(doc);
         self.active = self.documents.len() - 1;
+        self.sync_layout();
     }
 
     /// Opens a fresh empty window and makes it active (File ▸ New).
@@ -329,19 +416,20 @@ impl EditorApp {
     pub fn activate(&mut self, index: usize) {
         if index < self.documents.len() {
             self.active = index;
+            self.sync_layout();
         }
     }
 
     /// Activates the next window, wrapping (F6).
     pub fn next_window(&mut self) {
         let n = self.documents.len();
-        self.active = (self.active + 1) % n;
+        self.activate((self.active + 1) % n);
     }
 
     /// Activates the previous window, wrapping (Shift-F6).
     pub fn prev_window(&mut self) {
         let n = self.documents.len();
-        self.active = (self.active + n - 1) % n;
+        self.activate((self.active + n - 1) % n);
     }
 
     /// Removes the active window. The last window is never removed — it is reset to
@@ -356,6 +444,61 @@ impl EditorApp {
         if self.active >= self.documents.len() {
             self.active = self.documents.len() - 1;
         }
+        self.sync_layout();
+    }
+
+    /// Maximises/restores the active window (Window ▸ Zoom, F5).
+    pub fn toggle_zoom(&mut self) {
+        self.zoomed = !self.zoomed;
+        self.sync_layout();
+    }
+
+    /// Stacks the windows diagonally from the top-left, each reaching the
+    /// bottom-right corner (Window ▸ Cascade). Turns zoom off.
+    pub fn cascade(&mut self) {
+        self.zoomed = false;
+        let ds = self.desktop().size();
+        for (i, doc) in self.documents.iter_mut().enumerate() {
+            doc.normal = cascade_slot(ds, i);
+        }
+        self.sync_layout();
+    }
+
+    /// Lays the windows out in a grid that fills the desktop (Window ▸ Tile). Turns
+    /// zoom off.
+    pub fn tile(&mut self) {
+        self.zoomed = false;
+        let ds = self.desktop().size();
+        let n = self.documents.len();
+        // Roughly square grid; the last (possibly short) row stretches to fill.
+        let cols = (1..=n).find(|c| c * c >= n).unwrap_or(1);
+        let rows = n.div_ceil(cols);
+        for i in 0..n {
+            let row = i / cols;
+            let col = i % cols;
+            let cols_in_row = if row + 1 == rows {
+                n - cols * row
+            } else {
+                cols
+            };
+            let cell_w = ds.width / cols_in_row as i16;
+            let cell_h = ds.height / rows as i16;
+            let x = cell_w * col as i16;
+            let y = cell_h * row as i16;
+            // The last column/row absorbs the integer-division remainder.
+            let w = if col + 1 == cols_in_row {
+                ds.width - x
+            } else {
+                cell_w
+            };
+            let h = if row + 1 == rows {
+                ds.height - y
+            } else {
+                cell_h
+            };
+            self.documents[i].normal = Rect::from_origin_size(Point::new(x, y), Size::new(w, h));
+        }
+        self.sync_layout();
     }
 
     /// Handles a window-management key. Switching mutates `active` directly (no
@@ -365,6 +508,7 @@ impl EditorApp {
         match (key.code, key.modifiers) {
             (KeyCode::F(6), Modifiers::NONE) => self.next_window(),
             (KeyCode::F(6), Modifiers::SHIFT) => self.prev_window(),
+            (KeyCode::F(5), Modifiers::NONE) => self.toggle_zoom(),
             // Alt-F3 closes; F3 alone stays the editor's Find Next.
             (KeyCode::F(3), Modifiers::ALT) => {
                 ctx.post(CM_CLOSE);
@@ -503,20 +647,29 @@ impl EditorApp {
         }
     }
 
+    /// The window draw order, bottom-to-top: inactive windows in z-order, then the
+    /// active one on top. A zoomed active window covers the desktop, so only it is
+    /// drawn.
+    fn draw_order(&self) -> Vec<usize> {
+        if self.zoomed {
+            return vec![self.active];
+        }
+        let mut order: Vec<usize> = (0..self.documents.len())
+            .filter(|&i| i != self.active)
+            .collect();
+        order.push(self.active);
+        order
+    }
+
     /// Draws the whole screen into `canvas`.
     fn draw_canvas(&self, canvas: &mut Canvas) {
         let r = regions(self.size);
         {
-            let mut win = canvas.child(r.desktop);
-            let area = win.bounds();
-            win.fill(area, &self.backdrop);
-            Frame::new(&self.title(), self.frame_style, self.title_style)
-                .active(true)
-                .draw(&mut win);
-            let interior = inset1(area);
-            if !interior.is_empty() {
-                self.active_editor().draw(&mut win.child(interior));
-                self.draw_scrollbars(&mut win, area);
+            let mut desk = canvas.child(r.desktop);
+            let area = desk.bounds();
+            desk.fill(area, &self.backdrop);
+            for i in self.draw_order() {
+                self.draw_window(&mut desk, i);
             }
         }
         self.status_line.draw(&mut canvas.child(r.status));
@@ -525,12 +678,32 @@ impl EditorApp {
         self.menu_bar.draw_overlay(canvas);
     }
 
-    /// Draws the vertical and horizontal scroll bars over the window's right and
-    /// bottom border, reflecting the editor's position in the document. `win` is
-    /// the window's canvas and `area` its local bounds (`(0, 0)`-origin).
-    fn draw_scrollbars(&self, win: &mut Canvas, area: Rect) {
+    /// Draws window `i` (frame + editor + scroll bars) at its effective rectangle
+    /// within the desktop canvas `desk`. The active window gets the doubled frame.
+    fn draw_window(&self, desk: &mut Canvas, i: usize) {
+        let local = self.window_rect_local(i);
+        if local.is_empty() {
+            return;
+        }
+        let doc = &self.documents[i];
+        let mut win = desk.child(local);
+        let area = win.bounds();
+        Frame::new(&doc.title(), self.frame_style, self.title_style)
+            .active(i == self.active)
+            .draw(&mut win);
+        let interior = inset1(area);
+        if !interior.is_empty() {
+            doc.editor.draw(&mut win.child(interior));
+            self.draw_scrollbars(&mut win, area, &doc.editor);
+        }
+    }
+
+    /// Draws the vertical and horizontal scroll bars over a window's right and
+    /// bottom border, reflecting `editor`'s position in its document. `win` is the
+    /// window's canvas and `area` its local bounds (`(0, 0)`-origin).
+    fn draw_scrollbars(&self, win: &mut Canvas, area: Rect, editor: &EditorView) {
         let Size { width, height } = area.size();
-        let m = self.active_editor().scroll_metrics();
+        let m = editor.scroll_metrics();
 
         // Vertical bar on the right border, between the top and bottom corners.
         let vbar = Rect::from_origin_size(Point::new(width - 1, 1), Size::new(1, height - 2));
@@ -659,6 +832,9 @@ fn handle_command<T: Backend + EventSource>(
         CM_GOTO => go_to_line(app, ed, theme)?,
         CM_NEXT_WINDOW => ed.next_window(),
         CM_PREV_WINDOW => ed.prev_window(),
+        CM_ZOOM => ed.toggle_zoom(),
+        CM_CASCADE => ed.cascade(),
+        CM_TILE => ed.tile(),
         CM_CLOSE => close(app, ed, theme)?,
         _ => {}
     }
@@ -1200,27 +1376,25 @@ mod tests {
     }
 
     #[test]
-    fn the_window_menu_posts_next_previous_and_close() {
-        let mut ed = app();
-        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT); // open Window (Next highlighted)
-        assert!(ed.menu_is_open());
-        assert_eq!(
-            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
-            vec![CM_NEXT_WINDOW]
-        );
-        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT);
-        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Previous
-        assert_eq!(
-            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
-            vec![CM_PREV_WINDOW]
-        );
-        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT);
-        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Previous
-        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Close
-        assert_eq!(
-            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
-            vec![CM_CLOSE]
-        );
+    fn the_window_menu_posts_its_commands() {
+        // The Window menu, in order: Next, Previous, Zoom, Cascade, Tile, Close.
+        let expected = [
+            CM_NEXT_WINDOW,
+            CM_PREV_WINDOW,
+            CM_ZOOM,
+            CM_CASCADE,
+            CM_TILE,
+            CM_CLOSE,
+        ];
+        for (steps, &cmd) in expected.iter().enumerate() {
+            let mut ed = app();
+            keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT); // open Window (Next highlighted)
+            assert!(ed.menu_is_open());
+            for _ in 0..steps {
+                keydown(&mut ed, KeyCode::Down, Modifiers::NONE);
+            }
+            assert_eq!(keydown(&mut ed, KeyCode::Enter, Modifiers::NONE), vec![cmd]);
+        }
     }
 
     #[test]
@@ -1263,5 +1437,90 @@ mod tests {
         keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File
         keydown(&mut ed, KeyCode::F(6), Modifiers::NONE); // should be swallowed by the menu
         assert_eq!(ed.active_index(), 1, "F6 never reached window switching");
+    }
+
+    // --- MDI: layout — zoom / cascade / tile (Phase 8b) ---
+
+    #[test]
+    fn a_fresh_app_starts_zoomed_and_maximised() {
+        let ed = app();
+        assert!(ed.zoomed);
+        assert_eq!(
+            ed.active_editor().bounds(),
+            inset1(regions(ed.size).desktop)
+        );
+    }
+
+    #[test]
+    fn switching_windows_while_zoomed_maximises_the_new_active() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        let maximised = inset1(regions(ed.size).desktop);
+        ed.activate(0);
+        assert_eq!(ed.active_editor().bounds(), maximised);
+        ed.activate(1);
+        assert_eq!(ed.active_editor().bounds(), maximised);
+    }
+
+    #[test]
+    fn f5_zoom_toggles_the_active_window_between_maximised_and_normal() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        let maximised = ed.active_editor().bounds();
+        ed.cascade(); // un-zoom: windows take their cascade slots
+        assert!(!ed.zoomed);
+        assert_ne!(
+            ed.active_editor().bounds(),
+            maximised,
+            "a cascaded window is not maximised"
+        );
+        keydown(&mut ed, KeyCode::F(5), Modifiers::NONE); // Zoom back on
+        assert!(ed.zoomed);
+        assert_eq!(ed.active_editor().bounds(), maximised);
+    }
+
+    #[test]
+    fn cascade_offsets_each_window_down_and_right() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        ed.new_window(&THEME());
+        ed.cascade();
+        let o0 = ed.documents[0].normal.origin();
+        let o1 = ed.documents[1].normal.origin();
+        let o2 = ed.documents[2].normal.origin();
+        assert!(o1.x > o0.x && o1.y > o0.y);
+        assert!(o2.x > o1.x && o2.y > o1.y);
+    }
+
+    #[test]
+    fn tile_two_windows_splits_the_desktop_in_half() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        ed.new_window(&THEME());
+        ed.tile();
+        assert!(!ed.zoomed);
+        let ds = regions(ed.size).desktop.size();
+        let a = ed.documents[0].normal;
+        let b = ed.documents[1].normal;
+        // Side by side, full height, together covering the whole desktop width.
+        assert_eq!(a.origin(), Point::new(0, 0));
+        assert_eq!(a.height(), ds.height);
+        assert_eq!(b.origin(), Point::new(a.width(), 0));
+        assert_eq!(a.width() + b.width(), ds.width);
+        assert_eq!(b.height(), ds.height);
+    }
+
+    #[test]
+    fn snapshot_cascaded_windows_overlap_on_the_desktop() {
+        use rvision::buffer::Buffer;
+        use rvision::canvas::Canvas;
+
+        let mut ed = EditorApp::new(Size::new(34, 12), &THEME());
+        ed.active_editor_mut().set_text("first window");
+        ed.new_window(&THEME());
+        ed.active_editor_mut().set_text("second window");
+        ed.cascade();
+        let mut buf = Buffer::new(Size::new(34, 12));
+        ed.draw_canvas(&mut Canvas::new(&mut buf));
+        insta::assert_snapshot!(buf.to_text());
     }
 }
