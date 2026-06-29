@@ -256,6 +256,10 @@ single-document editor with menus, a status line, and modal Open/Save dialogs.
   undo units, cursor moves break the run, and an identity-based saved marker drives
   the dirty flag across undo/redo (ADR 0011).
 - **7c Find / Replace** (dialogs + buffer search + repeat-last) **and Go to line.**
+  - **7c.1 ✅ Go to Line** — establishes the editor's own modal-dialog pattern
+    (`edit::dialogs`, a bespoke `Modal` owning its controls so the driver reads the
+    value back; ADR 0017/0018) and `EditorView::go_to_line`. Search menu added.
+  - 7c.2 Find + Find Next (buffer search engine). 7c.3 Replace + Change All.
 
 ---
 

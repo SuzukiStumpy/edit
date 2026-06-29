@@ -27,7 +27,8 @@ use rvision::widgets::{
     FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, ScrollBar, StatusItem, StatusLine,
 };
 
-use crate::editor::{CM_COPY, CM_CUT, CM_PASTE, CM_REDO, CM_UNDO, EditorView};
+use crate::dialogs::GoToLine;
+use crate::editor::{CM_COPY, CM_CUT, CM_GOTO, CM_PASTE, CM_REDO, CM_UNDO, EditorView};
 use crate::file::{self, Encoding};
 
 /// File ▸ New.
@@ -110,6 +111,10 @@ impl EditorApp {
                         MenuItem::new("Copy", CM_COPY).with_shortcut("Ctrl-C"),
                         MenuItem::new("Paste", CM_PASTE).with_shortcut("Ctrl-V"),
                     ],
+                ),
+                Menu::new(
+                    "Search",
+                    vec![MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G")],
                 ),
             ],
             theme,
@@ -476,7 +481,23 @@ fn handle_command<T: Backend + EventSource>(
         CM_SAVE_AS => {
             save_as(app, ed, theme)?;
         }
+        CM_GOTO => go_to_line(app, ed, theme)?,
         _ => {}
+    }
+    Ok(())
+}
+
+/// Runs the Go to Line dialog and moves the caret to the chosen line.
+fn go_to_line<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<()> {
+    let mut dialog = GoToLine::new(theme);
+    if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
+        if let Some(line) = dialog.line() {
+            ed.editor.go_to_line(line);
+        }
     }
     Ok(())
 }
@@ -714,6 +735,19 @@ mod tests {
         assert!(ed.editor.undo(), "a pending action to undo");
         assert!(ed.editor.redo(), "and to redo");
         assert_eq!(ed.editor.text(), "z");
+    }
+
+    #[test]
+    fn ctrl_g_and_the_search_menu_post_go_to_line() {
+        let mut ed = app();
+        // The key posts it straight from the editor.
+        let posted = keydown(&mut ed, KeyCode::Char('g'), Modifiers::CONTROL);
+        assert_eq!(posted, vec![CM_GOTO]);
+        // And the Search menu's first item posts the same command.
+        keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT); // open Search
+        assert!(ed.menu_is_open());
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
+        assert_eq!(posted, vec![CM_GOTO]);
     }
 
     #[test]

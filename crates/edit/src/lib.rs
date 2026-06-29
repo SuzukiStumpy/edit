@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 pub mod app;
+pub mod dialogs;
 pub mod editor;
 pub mod file;
 mod history;

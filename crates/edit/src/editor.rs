@@ -40,6 +40,9 @@ pub const CM_PASTE: Command = Command(CM_USER + 12);
 pub const CM_UNDO: Command = Command(CM_USER + 13);
 /// Edit ▸ Redo — re-apply the last undone action.
 pub const CM_REDO: Command = Command(CM_USER + 14);
+/// Search ▸ Go to Line — the editor posts this; the app runs the dialog and calls
+/// [`go_to_line`](EditorView::go_to_line).
+pub const CM_GOTO: Command = Command(CM_USER + 18);
 
 /// A scrolling text editor over one owned [`LineArray`] document.
 pub struct EditorView {
@@ -109,6 +112,23 @@ impl EditorView {
     /// The caret position.
     pub fn cursor(&self) -> Position {
         self.cursor
+    }
+
+    /// The number of lines in the document (always at least 1).
+    pub fn line_count(&self) -> usize {
+        self.doc.line_count()
+    }
+
+    /// Moves the caret to the start of 1-based `line`, clamped into the document,
+    /// dropping the selection and revealing it. Used by the Go to Line dialog.
+    pub fn go_to_line(&mut self, line: usize) {
+        self.history.break_run();
+        let last = self.doc.line_count();
+        let target = line.clamp(1, last) - 1;
+        self.cursor = Position::new(target, 0);
+        self.anchor = None;
+        self.goal_col = None;
+        self.ensure_visible();
     }
 
     /// Whether the document has unsaved changes (relative to the last save, even
@@ -719,12 +739,14 @@ impl View for EditorView {
         let shift = key.modifiers.contains(Modifiers::SHIFT);
         let ctrl = key.modifiers.contains(Modifiers::CONTROL);
         let alt = key.modifiers.contains(Modifiers::ALT);
-        // Clipboard keys post a command for the app to act on (it owns the
-        // clipboard — ADR 0019); the editor itself touches nothing here.
+        // These keys post a command for the app to act on: the clipboard ones
+        // because the app owns the clipboard (ADR 0019), Go to Line because the app
+        // runs the dialog. The editor touches nothing here.
         match key.code {
             KeyCode::Char('c' | 'C') if ctrl && !alt => return self.post(ctx, CM_COPY),
             KeyCode::Char('x' | 'X') if ctrl && !alt => return self.post(ctx, CM_CUT),
             KeyCode::Char('v' | 'V') if ctrl && !alt => return self.post(ctx, CM_PASTE),
+            KeyCode::Char('g' | 'G') if ctrl && !alt => return self.post(ctx, CM_GOTO),
             KeyCode::Insert if ctrl => return self.post(ctx, CM_COPY),
             KeyCode::Insert if shift => return self.post(ctx, CM_PASTE),
             KeyCode::Delete if shift => return self.post(ctx, CM_CUT),
@@ -1054,6 +1076,32 @@ mod tests {
         // With nothing selected it takes nothing and leaves the document alone.
         assert_eq!(e.take_selection(), None);
         assert_eq!(e.text(), "lo");
+    }
+
+    // --- go to line (7c) ---
+
+    #[test]
+    fn go_to_line_moves_to_the_line_start_and_clamps() {
+        let mut e = editor(20, 4).clone_doc("one\ntwo\nthree\nfour");
+        e.go_to_line(3); // 1-based
+        assert_eq!(e.cursor(), Position::new(2, 0));
+        e.go_to_line(99); // past the end clamps to the last line
+        assert_eq!(e.cursor(), Position::new(3, 0));
+        e.go_to_line(0); // below 1 clamps to the first line
+        assert_eq!(e.cursor(), Position::new(0, 0));
+    }
+
+    #[test]
+    fn ctrl_g_posts_the_go_to_line_command() {
+        let mut e = editor(20, 4).clone_doc("a\nb");
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = e.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Char('g'), Modifiers::CONTROL)),
+            &mut ctx,
+        );
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(ctx.take_posted(), vec![Event::Command(CM_GOTO)]);
     }
 
     // --- undo / redo (the journal; ADR 0011, 7b) ---
