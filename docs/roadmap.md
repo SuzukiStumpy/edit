@@ -297,9 +297,23 @@ tile, zoom, close; Alt+1…9 to switch (ADR 0009). `edit::app` owns its document
 
 ## Phase 9 — Mouse
 
-- Fill in mouse behaviour across widgets (the positional phase has existed since
-  Phase 3): click-to-focus, menu/button/scrollbar interaction, window
-  move/resize by drag, drag-select in the editor (ADR 0007).
+Fill in mouse *behaviour* across widgets (the positional dispatch phase has
+existed since Phase 3, ADR 0004/0007): click-to-focus, menu/button/scrollbar
+interaction, window move/resize by drag, drag-select in the editor.
+
+- **9a ✅** Enable capture + the editor-app routing seam — `CrosstermBackend`
+  now sends `EnableMouseCapture`/`DisableMouseCapture` around the alternate
+  screen; `EditorApp::dispatch` routes `Event::Mouse` instead of dropping it. A
+  left-click focuses the window under the pointer (`window_at` hit-tests
+  front-to-back in `draw_order`); clicks over bare desktop are ignored.
+- **9b** Menu mouse — click the menu bar to open a pull-down, click an item to
+  choose it, click-out to close (`rvision` `MenuBar`/`Menu`).
+- **9c** Editor mouse — click to place the caret, drag to select, wheel to
+  scroll, click the window scroll bars.
+- **9d** Window chrome drag — title-bar drag to move, border/corner to resize,
+  click the close/zoom glyphs.
+- **9e** Dialog controls — `Button`, `InputLine`, `CheckBox`, `RadioButtons`,
+  `ListViewer`, `ScrollBar` clicks.
 
 ---
 

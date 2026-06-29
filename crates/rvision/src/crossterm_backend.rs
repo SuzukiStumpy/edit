@@ -49,6 +49,7 @@ impl CrosstermBackend {
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
         out.execute(EnterAlternateScreen)?;
+        out.execute(ct::EnableMouseCapture)?;
         out.execute(Hide)?;
         let (cols, rows) = terminal::size()?;
         let size = Size::new(cols as i16, rows as i16);
@@ -125,6 +126,7 @@ impl Drop for CrosstermBackend {
 fn restore_terminal() {
     let mut out = io::stdout();
     let _ = out.execute(Show);
+    let _ = out.execute(ct::DisableMouseCapture);
     let _ = out.execute(LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
 }

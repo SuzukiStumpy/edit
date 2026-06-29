@@ -19,7 +19,9 @@ use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet};
-use rvision::event::{Event, EventResult, KeyCode, KeyEvent, Modifiers};
+use rvision::event::{
+    Event, EventResult, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
+};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, View};
@@ -313,6 +315,23 @@ impl EditorApp {
         }
     }
 
+    /// Window `i`'s effective rectangle in **screen** coordinates (its desktop-local
+    /// rect shifted by the desktop origin).
+    fn window_rect_screen(&self, i: usize) -> Rect {
+        let origin = self.desktop().origin();
+        let local = self.window_rect_local(i);
+        Rect::from_origin_size(local.origin().offset(origin.x, origin.y), local.size())
+    }
+
+    /// The topmost window whose screen rectangle contains `pos`, or `None` if the
+    /// point is over bare desktop. Searches front-to-back (the reverse of
+    /// [`draw_order`](Self::draw_order)), so the visually-uppermost window wins.
+    fn window_at(&self, pos: Point) -> Option<usize> {
+        self.draw_order().into_iter().rev().find(|&i| {
+            !self.window_rect_screen(i).is_empty() && self.window_rect_screen(i).contains(pos)
+        })
+    }
+
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
     /// viewport size and scroll metrics track the current layout. Call after any
     /// change to the active window, zoom, sizes, or the terminal size.
@@ -601,6 +620,21 @@ impl EditorApp {
 
     // --- event dispatch ---
 
+    /// Routes a mouse event. Phase 9a: a left-click on a window focuses it (and a
+    /// click on the active window keeps it active); clicks over bare desktop or
+    /// outside it are ignored. Later sub-phases add menu/scrollbar/drag behaviour.
+    fn handle_mouse(&mut self, mouse: &MouseEvent, _ctx: &mut Context) -> EventResult {
+        if let MouseKind::Down(MouseButton::Left) = mouse.kind {
+            if let Some(i) = self.window_at(mouse.pos) {
+                if i != self.active {
+                    self.activate(i);
+                }
+                return EventResult::Consumed;
+            }
+        }
+        EventResult::Ignored
+    }
+
     /// Routes `event` through the three local passes (menu → editor → status) and
     /// returns the commands those passes posted, for the driver to act on
     /// (ADR 0018).
@@ -623,8 +657,11 @@ impl EditorApp {
             Event::Idle | Event::Broadcast(_) => {
                 self.menu_bar.handle_event(event, &mut ctx);
             }
-            // Resize is handled by the driver (relayout); mouse is Phase 9.
-            Event::Resize(_) | Event::Mouse(_) | Event::Command(_) => {}
+            Event::Mouse(mouse) => {
+                self.handle_mouse(mouse, &mut ctx);
+            }
+            // Resize is handled by the driver (relayout).
+            Event::Resize(_) | Event::Command(_) => {}
         }
         ctx.take_posted()
             .into_iter()
@@ -1578,5 +1615,47 @@ mod tests {
         let mut buf = Buffer::new(Size::new(34, 12));
         ed.draw_canvas(&mut Canvas::new(&mut buf));
         insta::assert_snapshot!(buf.to_text());
+    }
+
+    // --- mouse: click-to-focus (Phase 9a) ---
+
+    fn left_click(ed: &mut EditorApp, x: i16, y: i16) -> Vec<Command> {
+        ed.dispatch(
+            &Event::Mouse(MouseEvent {
+                kind: MouseKind::Down(MouseButton::Left),
+                pos: Point::new(x, y),
+                modifiers: Modifiers::NONE,
+            }),
+            &CommandSet::new(),
+        )
+    }
+
+    #[test]
+    fn clicking_an_inactive_window_makes_it_active() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        ed.new_window(&THEME()); // active = 1
+        ed.tile(); // window 0 = left half, window 1 = right half, un-zoomed
+        assert_eq!(ed.active_index(), 1);
+        left_click(&mut ed, 5, 5); // inside window 0 (left half of the desktop)
+        assert_eq!(ed.active_index(), 0);
+    }
+
+    #[test]
+    fn clicking_the_active_window_keeps_it_active() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        ed.new_window(&THEME());
+        ed.tile();
+        left_click(&mut ed, 25, 5); // inside window 1 (right half), already active
+        assert_eq!(ed.active_index(), 1);
+    }
+
+    #[test]
+    fn clicking_outside_the_desktop_changes_nothing() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        ed.new_window(&THEME());
+        ed.tile();
+        let before = ed.active_index();
+        left_click(&mut ed, 5, 0); // a bare stretch of the menu-bar row
+        assert_eq!(ed.active_index(), before);
     }
 }
