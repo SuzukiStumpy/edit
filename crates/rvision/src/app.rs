@@ -16,6 +16,7 @@ use crate::canvas::Canvas;
 use crate::command::{CM_QUIT, Command, CommandSet};
 use crate::event::{Event, EventResult, MouseEvent};
 use crate::geometry::{Point, Rect, Size};
+use crate::theme::{Role, Theme};
 use crate::view::{Context, Modal, View};
 use crate::widgets::{Desktop, MenuBar, StatusLine};
 use std::collections::VecDeque;
@@ -140,6 +141,9 @@ impl<T: Backend + EventSource> Application<T> {
         dialog: &mut dyn Modal,
     ) -> io::Result<Command> {
         let commands = CommandSet::new();
+        // A modal floats over the background, so it casts a drop shadow (Phase 10).
+        // The look is fixed (there is one theme yet), resolved from the default.
+        let shadow_style = Theme::default().style(Role::Shadow);
         loop {
             let size = self.terminal.size();
             let mut frame = Buffer::new(size);
@@ -148,6 +152,7 @@ impl<T: Backend + EventSource> Application<T> {
             let area = centered(dialog.size(), size);
             {
                 let mut canvas = Canvas::new(&mut frame);
+                canvas.shadow(area, shadow_style);
                 let mut sub = canvas.child(area);
                 dialog.draw(&mut sub);
             }
@@ -488,6 +493,10 @@ mod tests {
 
         fn screen_text(&self) -> String {
             self.backend.to_text()
+        }
+
+        fn screen(&self) -> &Buffer {
+            self.backend.screen()
         }
 
         fn presents(&self) -> usize {
@@ -922,6 +931,27 @@ mod tests {
         // The background was painted under the centred dialog, and we presented.
         assert!(app.terminal().screen_text().starts_with("BG"));
         assert!(app.terminal().presents() >= 1);
+    }
+
+    #[test]
+    fn exec_view_casts_a_drop_shadow_under_the_dialog() {
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        let size = Size::new(40, 12);
+        let terminal = ScriptedTerminal::new(size, vec![Some(enter)]);
+        let mut app = Application::new(terminal);
+        let mut background = Backdrop;
+        let mut dialog = message_box();
+        let area = centered(dialog.size(), size);
+
+        app.exec_view(&mut background, &mut dialog).unwrap();
+
+        // A cell just past the dialog's right edge, one row below its top, is dimmed
+        // to the shadow style — the dialog floats over the background.
+        let screen = app.terminal().screen();
+        let shadow_cell = screen
+            .get(Point::new(area.bottom_right().x, area.origin().y + 1))
+            .unwrap();
+        assert_eq!(shadow_cell.style(), Theme::default().style(Role::Shadow));
     }
 
     #[test]

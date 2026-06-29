@@ -137,8 +137,14 @@ pub struct EditorApp {
     finished: bool,
     /// An in-progress drag of the active window's chrome (Phase 9d), or `None`.
     drag: Option<Drag>,
+    /// Whether the in-progress left-drag is extending an editor selection — set
+    /// only when a press actually landed in the editor interior, so a drag that
+    /// began on a scroll bar or the frame never leaks into a text selection.
+    selecting: bool,
     frame_style: Style,
     title_style: Style,
+    inactive_title_style: Style,
+    shadow_style: Style,
     backdrop: Cell,
 }
 
@@ -150,6 +156,9 @@ enum Drag {
     Move { dx: i16, dy: i16 },
     /// Resizing from the bottom-right corner: the pointer's offset from that cell.
     Resize { dx: i16, dy: i16 },
+    /// Dragging a scroll-bar thumb: the bar's axis. The active window scrolls so
+    /// its thumb follows the pointer (`ScrollBar::pos_at` inverts the placement).
+    ScrollThumb { orientation: Orientation },
 }
 
 /// Where on a window's chrome a press landed (Phase 9d).
@@ -317,8 +326,11 @@ impl EditorApp {
             clipboard: String::new(),
             finished: false,
             drag: None,
+            selecting: false,
             frame_style: theme.style(Role::WindowFrame),
             title_style: theme.style(Role::WindowTitle),
+            inactive_title_style: theme.style(Role::WindowTitleInactive),
+            shadow_style: theme.style(Role::Shadow),
             backdrop: Cell::from_char('░', theme.style(Role::DesktopBackground)),
         };
         app.add_document(Document::new(theme));
@@ -386,13 +398,13 @@ impl EditorApp {
         };
 
         let vbar = screen(vscroll_rect(area.size()));
-        if !vbar.is_empty() && vbar.contains(pos) {
+        if m.needs_vertical() && !vbar.is_empty() && vbar.contains(pos) {
             let mut bar = ScrollBar::new(vbar, self.frame_style);
             bar.set_metrics(m.lines, m.viewport.height.max(0) as usize, m.top);
             return bar.hit(pos).map(|part| (Orientation::Vertical, part));
         }
         let hbar = screen(hscroll_rect(area.size()));
-        if !hbar.is_empty() && hbar.contains(pos) {
+        if m.needs_horizontal() && !hbar.is_empty() && hbar.contains(pos) {
             let mut bar = ScrollBar::horizontal(hbar, self.frame_style);
             bar.set_metrics(
                 m.content_width.max(0) as usize,
@@ -518,9 +530,45 @@ impl EditorApp {
                 let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
                 Rect::from_origin_size(cur.origin(), Size::new(w, h))
             }
+            // A thumb drag scrolls the editor rather than moving the window.
+            Drag::ScrollThumb { orientation } => {
+                self.scroll_to_thumb(self.active, orientation, pos);
+                return;
+            }
         };
         self.documents[self.active].normal = clamp_rect(next, ds);
         self.sync_layout();
+    }
+
+    /// Scrolls window `i`'s editor so the dragged scroll-bar thumb tracks screen
+    /// `pos`: rebuilds the bar with the editor's current metrics (the geometry
+    /// shared with drawing and hit-testing) and steps to the position
+    /// [`ScrollBar::pos_at`] reports under the pointer.
+    fn scroll_to_thumb(&mut self, i: usize, orientation: Orientation, pos: Point) {
+        let area = self.window_rect_screen(i);
+        let m = self.documents[i].editor.scroll_metrics();
+        let o = area.origin();
+        let screen = |local: Rect| {
+            Rect::from_origin_size(o.offset(local.origin().x, local.origin().y), local.size())
+        };
+        let editor = &mut self.documents[i].editor;
+        match orientation {
+            Orientation::Vertical => {
+                let mut bar = ScrollBar::new(screen(vscroll_rect(area.size())), self.frame_style);
+                bar.set_metrics(m.lines, m.viewport.height.max(0) as usize, m.top);
+                editor.scroll_lines(bar.pos_at(pos) as i16 - m.top as i16);
+            }
+            Orientation::Horizontal => {
+                let mut bar =
+                    ScrollBar::horizontal(screen(hscroll_rect(area.size())), self.frame_style);
+                bar.set_metrics(
+                    m.content_width.max(0) as usize,
+                    m.viewport.width.max(0) as usize,
+                    m.left.max(0) as usize,
+                );
+                editor.scroll_cols(bar.pos_at(pos) as i16 - m.left);
+            }
+        }
     }
 
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
@@ -648,27 +696,32 @@ impl EditorApp {
 
     /// Activates the next window, wrapping (F6).
     pub fn next_window(&mut self) {
+        if self.documents.is_empty() {
+            return;
+        }
         let n = self.documents.len();
         self.activate((self.active + 1) % n);
     }
 
     /// Activates the previous window, wrapping (Shift-F6).
     pub fn prev_window(&mut self) {
+        if self.documents.is_empty() {
+            return;
+        }
         let n = self.documents.len();
         self.activate((self.active + n - 1) % n);
     }
 
-    /// Removes the active window. The last window is never removed — it is reset to
-    /// a fresh empty document instead, so there is always at least one. Otherwise
-    /// the previous window in z-order becomes active.
+    /// Removes the active window. Closing the last one leaves an empty desktop —
+    /// New/Open spawn a fresh window again. Otherwise the previous window in
+    /// z-order becomes active.
     pub fn remove_active_window(&mut self) {
-        if self.documents.len() == 1 {
-            self.new_file();
+        if self.documents.is_empty() {
             return;
         }
         self.documents.remove(self.active);
         if self.active >= self.documents.len() {
-            self.active = self.documents.len() - 1;
+            self.active = self.documents.len().saturating_sub(1);
         }
         self.sync_layout();
     }
@@ -833,16 +886,24 @@ impl EditorApp {
                 if i != self.active {
                     self.activate(i);
                 }
+                // A fresh press starts no selection unless it lands in the editor.
+                self.selecting = false;
                 match self.chrome_hit(self.active, mouse.pos) {
                     ChromeHit::Close => ctx.post(CM_CLOSE), // through the discard guard
                     ChromeHit::Zoom => self.toggle_zoom(),
                     ChromeHit::Move => self.start_move(mouse.pos),
                     ChromeHit::Resize => self.start_resize(mouse.pos),
-                    // A scroll bar scrolls; otherwise an interior press places the caret.
+                    // A scroll bar scrolls (and the thumb starts a drag); otherwise
+                    // an interior press places the caret and begins a selection.
                     ChromeHit::None => {
                         if let Some((o, part)) = self.scrollbar_hit(self.active, mouse.pos) {
-                            self.apply_scroll(self.active, o, part);
+                            if part == ScrollPart::Thumb {
+                                self.drag = Some(Drag::ScrollThumb { orientation: o });
+                            } else {
+                                self.apply_scroll(self.active, o, part);
+                            }
                         } else if inset1(self.window_rect_screen(self.active)).contains(mouse.pos) {
+                            self.selecting = true;
                             self.doc_mut()
                                 .editor
                                 .handle_event(&Event::Mouse(*mouse), ctx);
@@ -851,20 +912,26 @@ impl EditorApp {
                 }
                 EventResult::Consumed
             }
-            // A drag moves/resizes the window if one is under way, else drag-selects.
+            // A drag moves/resizes the window or drags a scroll thumb if one is under
+            // way; otherwise it extends a selection, but only one the editor started.
             MouseKind::Drag(MouseButton::Left) => {
                 if self.drag.is_some() {
                     self.drag_to(mouse.pos);
                     EventResult::Consumed
-                } else {
+                } else if self.selecting {
                     self.doc_mut()
                         .editor
                         .handle_event(&Event::Mouse(*mouse), ctx)
+                } else {
+                    EventResult::Consumed
                 }
             }
-            // Releasing ends a window drag (the editor needs no release).
+            // Releasing ends any window/thumb drag or selection (the editor needs no
+            // release of its own).
             MouseKind::Up(MouseButton::Left) => {
-                if self.drag.take().is_some() {
+                let was_active = self.drag.take().is_some() || self.selecting;
+                self.selecting = false;
+                if was_active {
                     EventResult::Consumed
                 } else {
                     EventResult::Ignored
@@ -893,7 +960,7 @@ impl EditorApp {
                 if result == EventResult::Ignored {
                     result = self.handle_window_key(key, &mut ctx);
                 }
-                if result == EventResult::Ignored {
+                if result == EventResult::Ignored && !self.documents.is_empty() {
                     result = self.doc_mut().editor.handle_event(event, &mut ctx);
                 }
                 if result == EventResult::Ignored {
@@ -922,6 +989,11 @@ impl EditorApp {
     /// was one. The app owns the clipboard so these need no terminal — the driver
     /// runs them before the dialog-bearing file commands (ADR 0019).
     pub fn handle_clipboard(&mut self, command: Command) -> bool {
+        // With no open window there is no editor to act on; still report the
+        // clipboard commands as handled so the driver doesn't fall through.
+        if self.documents.is_empty() {
+            return matches!(command, CM_COPY | CM_CUT | CM_PASTE);
+        }
         match command {
             CM_COPY => {
                 if let Some(text) = self.active_editor().selected_text() {
@@ -950,6 +1022,9 @@ impl EditorApp {
     /// active one on top. A zoomed active window covers the desktop, so only it is
     /// drawn.
     fn draw_order(&self) -> Vec<usize> {
+        if self.documents.is_empty() {
+            return Vec::new();
+        }
         if self.zoomed {
             return vec![self.active];
         }
@@ -984,12 +1059,25 @@ impl EditorApp {
         if local.is_empty() {
             return;
         }
+        // Cast the window's drop shadow on the desktop (or a lower window) first,
+        // so this window — drawn next — sits on top of its own shadow (Phase 10).
+        desk.shadow(local, self.shadow_style);
         let doc = &self.documents[i];
         let mut win = desk.child(local);
         let area = win.bounds();
-        Frame::new(&self.window_title(i), self.frame_style, self.title_style)
-            .active(i == self.active)
-            .draw(&mut win);
+        let active = i == self.active;
+        Frame::new(
+            &self.window_title(i),
+            self.frame_style,
+            if active {
+                self.title_style
+            } else {
+                self.inactive_title_style
+            },
+        )
+        .active(active)
+        .maximized(active && self.zoomed)
+        .draw(&mut win);
         let interior = inset1(area);
         if !interior.is_empty() {
             doc.editor.draw(&mut win.child(interior));
@@ -1004,8 +1092,10 @@ impl EditorApp {
         let m = editor.scroll_metrics();
 
         // Vertical bar on the right border, between the top and bottom corners.
+        // Drawn only when the document overflows the viewport (Phase 10): a bar
+        // that can't scroll anywhere just clutters the frame.
         let vbar = vscroll_rect(area.size());
-        if !vbar.is_empty() {
+        if m.needs_vertical() && !vbar.is_empty() {
             let mut bar = ScrollBar::new(vbar, self.frame_style);
             bar.set_metrics(m.lines, m.viewport.height.max(0) as usize, m.top);
             bar.draw(&mut win.child(vbar));
@@ -1013,7 +1103,7 @@ impl EditorApp {
 
         // Horizontal bar on the bottom border, between the left and right corners.
         let hbar = hscroll_rect(area.size());
-        if !hbar.is_empty() {
+        if m.needs_horizontal() && !hbar.is_empty() {
             let mut bar = ScrollBar::horizontal(hbar, self.frame_style);
             bar.set_metrics(
                 m.content_width.max(0) as usize,
@@ -1095,6 +1185,11 @@ fn handle_command<T: Backend + EventSource>(
 ) -> io::Result<()> {
     // Clipboard commands need no dialog/terminal; act on them first (ADR 0019).
     if ed.handle_clipboard(command) {
+        return Ok(());
+    }
+    // On an empty desktop only New/Open (and Quit) do anything; the rest need a
+    // document to act on, so they quietly no-op.
+    if ed.window_count() == 0 && !matches!(command, CM_NEW | CM_OPEN | CM_QUIT) {
         return Ok(());
     }
     match command {
@@ -1232,8 +1327,8 @@ fn confirm_discard_all<T: Backend + EventSource>(
     Ok(true)
 }
 
-/// Confirms discarding the active window, then closes it (Window ▸ Close). The
-/// last window is reset to a fresh Untitled rather than removed.
+/// Confirms discarding the active window, then closes it (Window ▸ Close).
+/// Closing the last window leaves an empty desktop.
 fn close<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
@@ -1717,15 +1812,36 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_last_window_leaves_a_fresh_untitled() {
+    fn closing_the_last_window_leaves_an_empty_desktop() {
         let mut ed = app();
         type_chars(&mut ed, "stuff");
-        ed.documents[ed.active].path = Some(PathBuf::from("/tmp/x.txt"));
         ed.remove_active_window();
-        assert_eq!(ed.window_count(), 1, "never fewer than one window");
+        assert_eq!(ed.window_count(), 0, "the desktop can be emptied");
+        // New opens a fresh window again.
+        ed.new_window(&THEME());
+        assert_eq!(ed.window_count(), 1);
         assert_eq!(ed.active_editor().text(), "");
-        assert!(ed.path().is_none());
-        assert!(!ed.is_modified());
+    }
+
+    #[test]
+    fn an_empty_desktop_ignores_keys_but_still_draws_and_exits() {
+        let mut ed = app();
+        ed.remove_active_window();
+        assert_eq!(ed.window_count(), 0);
+        // Typing reaches no editor and posts nothing — no panic on the empty desktop.
+        assert!(keydown(&mut ed, KeyCode::Char('h'), Modifiers::NONE).is_empty());
+        // Drawing the empty desktop composes without panicking.
+        let mut buf = Buffer::new(Size::new(40, 12));
+        ed.draw_canvas(&mut Canvas::new(&mut buf));
+        // Window-management commands quietly no-op rather than panic.
+        ed.next_window();
+        ed.prev_window();
+        ed.toggle_zoom();
+        // Alt-X still posts Quit via the status line.
+        assert_eq!(
+            keydown(&mut ed, KeyCode::Char('x'), Modifiers::ALT),
+            vec![CM_QUIT]
+        );
     }
 
     #[test]
@@ -1862,6 +1978,54 @@ mod tests {
         insta::assert_snapshot!(buf.to_text());
     }
 
+    #[test]
+    fn scrollbars_appear_only_when_the_document_overflows() {
+        let render = |ed: &EditorApp| {
+            let mut buf = Buffer::new(Size::new(40, 12));
+            ed.draw_canvas(&mut Canvas::new(&mut buf));
+            buf.to_text()
+        };
+
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        // A document that fits the viewport draws no scroll bars (Phase 10).
+        ed.active_editor_mut().set_text("short");
+        let text = render(&ed);
+        assert!(!text.contains('▲'), "no vertical bar when the text fits");
+        assert!(!text.contains('◄'), "no horizontal bar when the text fits");
+
+        // More lines than the viewport brings the vertical bar back.
+        ed.active_editor_mut().set_text(&"line\n".repeat(40));
+        assert!(
+            render(&ed).contains('▲'),
+            "a vertical bar appears once the text overflows"
+        );
+    }
+
+    #[test]
+    fn an_overlapping_window_casts_a_drop_shadow_on_the_desktop() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        // Un-zoom and place a small window away from the desktop edges, so its
+        // shadow falls on the backdrop rather than being clipped off-screen.
+        ed.zoomed = false;
+        ed.documents[0].normal = Rect::from_origin_size(Point::new(2, 2), Size::new(10, 4));
+        ed.sync_layout();
+
+        let mut buf = Buffer::new(Size::new(40, 12));
+        ed.draw_canvas(&mut Canvas::new(&mut buf));
+
+        // The window spans desktop-local (2,2)..(12,6); the desktop starts at screen
+        // row 1, so the right-edge shadow lands at screen (12, 5).
+        assert_eq!(
+            buf.get(Point::new(12, 5)).unwrap().style(),
+            THEME().style(Role::Shadow)
+        );
+        // Backdrop clear of the window and its shadow is left alone.
+        assert_eq!(
+            buf.get(Point::new(0, 1)).unwrap().style(),
+            THEME().style(Role::DesktopBackground)
+        );
+    }
+
     // --- mouse: click-to-focus (Phase 9a) ---
 
     fn left_click(ed: &mut EditorApp, x: i16, y: i16) -> Vec<Command> {
@@ -1981,6 +2145,38 @@ mod tests {
         assert_eq!(ed.active_editor().scroll_metrics().left, 0);
         left_click(&mut ed, 38, 10); // the ► at the end of the bottom bar
         assert_eq!(ed.active_editor().scroll_metrics().left, 1);
+    }
+
+    #[test]
+    fn dragging_the_vertical_thumb_scrolls_without_selecting() {
+        let mut ed = app(); // zoomed window; the right-hand bar runs screen rows 2..10
+        ed.active_editor_mut().set_text(&"line\n".repeat(30));
+        assert_eq!(ed.active_editor().scroll_metrics().top, 0);
+        left_click(&mut ed, 39, 3); // press the thumb (sitting at the top of the track)
+        drag_to(&mut ed, 39, 8); // drag it down the track
+        assert!(
+            ed.active_editor().scroll_metrics().top > 0,
+            "the thumb drag panned the view down"
+        );
+        assert_eq!(
+            ed.active_editor().selected_text(),
+            None,
+            "dragging the thumb must not select text"
+        );
+        release(&mut ed, 39, 8);
+    }
+
+    #[test]
+    fn a_drag_that_began_on_a_scroll_bar_never_selects_text() {
+        let mut ed = app();
+        ed.active_editor_mut().set_text(&"line\n".repeat(30));
+        left_click(&mut ed, 39, 9); // the ▼ arrow — a scroll, not an interior press
+        drag_to(&mut ed, 20, 5); // drag on into the interior
+        assert_eq!(
+            ed.active_editor().selected_text(),
+            None,
+            "a drag begun off the text never leaks into a selection"
+        );
     }
 
     #[test]

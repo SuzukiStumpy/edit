@@ -157,6 +157,47 @@ impl<'a> Canvas<'a> {
         self.set(Point::new(left, bottom), Cell::from_char('└', style));
         self.set(Point::new(right, bottom), Cell::from_char('┘', style));
     }
+
+    /// Casts a drop shadow for a box occupying `area` (local coordinates): the
+    /// classic TurboVision shape — a two-column strip down its right side and a
+    /// one-row strip along its bottom, offset by `(2, 1)` so the box appears to
+    /// float. Each shadowed cell keeps its grapheme but is repainted in `style`
+    /// (whatever shows through is dimmed, not blanked). Clipped to the surface, so
+    /// a box flush against an edge simply casts no shadow there.
+    pub fn shadow(&mut self, area: Rect, style: Style) {
+        if area.is_empty() {
+            return;
+        }
+        let o = area.origin();
+        let Size { width, height } = area.size();
+        let right = Rect::from_origin_size(Point::new(o.x + width, o.y + 1), Size::new(2, height));
+        let below = Rect::from_origin_size(Point::new(o.x + 2, o.y + height), Size::new(width, 1));
+        self.dim(right, style);
+        self.dim(below, style);
+    }
+
+    /// Repaints the cells under `area` in `style`, keeping each cell's grapheme.
+    /// The in-place primitive behind [`shadow`](Self::shadow): unlike the painting
+    /// primitives it *reads* the existing cells, so the caller draws it over
+    /// already-composed content. Clipped to the surface and the clip.
+    fn dim(&mut self, area: Rect, style: Style) {
+        let Some(local) = area.intersection(self.bounds()) else {
+            return;
+        };
+        let br = local.bottom_right();
+        for y in local.origin().y..br.y {
+            for x in local.origin().x..br.x {
+                let absolute = self.offset.offset(x, y);
+                if !self.clip.contains(absolute) {
+                    continue;
+                }
+                if let Some(existing) = self.buffer.get(absolute) {
+                    let grapheme = existing.grapheme().clone();
+                    self.buffer.set(absolute, Cell::new(grapheme, style));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -277,6 +318,55 @@ mod tests {
         assert_eq!(glyph(&buf, 0, 0), " ");
         assert_eq!(glyph(&buf, 4, 1), " ");
         assert_eq!(glyph(&buf, 1, 3), " ");
+    }
+
+    #[test]
+    fn shadow_dims_a_right_and_bottom_strip_keeping_glyphs() {
+        use crate::color::{Color, Color16};
+
+        let bright = Style::new()
+            .fg(Color::Named(Color16::White))
+            .bg(Color::Named(Color16::Blue));
+        let dim = Style::new()
+            .fg(Color::Named(Color16::DarkGray))
+            .bg(Color::Named(Color16::Black));
+
+        let mut buf = Buffer::new(Size::new(10, 6));
+        let mut root = Canvas::new(&mut buf);
+        root.fill(root.bounds(), &Cell::from_char('A', bright));
+        // A 4×3 box at (1, 1) casts its shadow on the surrounding fill.
+        root.shadow(
+            Rect::from_origin_size(Point::new(1, 1), Size::new(4, 3)),
+            dim,
+        );
+
+        // Right strip: two columns (5, 6) from row 2 down to row 4 inclusive.
+        let shadowed = buf.get(Point::new(5, 2)).unwrap();
+        assert_eq!(shadowed.grapheme().to_string(), "A", "the glyph stays");
+        assert_eq!(shadowed.style(), dim);
+        assert_eq!(buf.get(Point::new(6, 4)).unwrap().style(), dim);
+        // Bottom strip: row 4, columns 3..6.
+        assert_eq!(buf.get(Point::new(3, 4)).unwrap().style(), dim);
+        // The box's own cells and the strip's inset corners are untouched.
+        assert_eq!(buf.get(Point::new(1, 1)).unwrap().style(), bright);
+        assert_eq!(buf.get(Point::new(5, 1)).unwrap().style(), bright);
+        assert_eq!(buf.get(Point::new(1, 4)).unwrap().style(), bright);
+    }
+
+    #[test]
+    fn shadow_clips_against_the_surface_edge() {
+        use crate::color::{Color, Color16};
+
+        let dim = Style::new().bg(Color::Named(Color16::Black));
+        let mut buf = Buffer::new(Size::new(4, 2));
+        let mut root = Canvas::new(&mut buf);
+        // A box filling the surface: its shadow falls entirely off-surface.
+        root.shadow(root.bounds(), dim);
+        for y in 0..2 {
+            for x in 0..4 {
+                assert_eq!(buf.get(Point::new(x, y)).unwrap().style(), Style::new());
+            }
+        }
     }
 
     #[test]

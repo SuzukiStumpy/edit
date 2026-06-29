@@ -6,7 +6,7 @@
 //! here; alternative (dark, monochrome) themes can be added later without
 //! touching widget code.
 
-use crate::color::{Color, Color16, Style};
+use crate::color::{Attributes, Color, Color16, Style};
 
 /// A semantic role describing what a piece of UI is, independent of its colours.
 ///
@@ -18,8 +18,10 @@ pub enum Role {
     DesktopBackground,
     /// A window's border/frame.
     WindowFrame,
-    /// A window's title text.
+    /// The active window's title text (bright, to stand out).
     WindowTitle,
+    /// An inactive window's title text (dimmer than the active one).
+    WindowTitleInactive,
     /// The top menu bar background.
     MenuBar,
     /// The currently highlighted menu item.
@@ -43,14 +45,17 @@ pub enum Role {
     /// An editable input field (an [`InputLine`](crate::widgets::InputLine), a
     /// list-box interior).
     Input,
+    /// The drop shadow cast by a window or dialog over what lies behind it.
+    Shadow,
 }
 
 impl Role {
     /// Every role, in discriminant order (so `ALL[i] as usize == i`).
-    pub const ALL: [Role; 14] = [
+    pub const ALL: [Role; 16] = [
         Role::DesktopBackground,
         Role::WindowFrame,
         Role::WindowTitle,
+        Role::WindowTitleInactive,
         Role::MenuBar,
         Role::MenuSelected,
         Role::MenuDisabled,
@@ -62,6 +67,7 @@ impl Role {
         Role::Selection,
         Role::DialogBackground,
         Role::Input,
+        Role::Shadow,
     ];
 
     /// The number of roles.
@@ -97,7 +103,11 @@ impl Default for Theme {
         let mut styles = [Style::new(); Role::COUNT];
         styles[Role::DesktopBackground as usize] = cga(Color16::LightGray, Color16::Blue);
         styles[Role::WindowFrame as usize] = cga(Color16::White, Color16::Blue);
-        styles[Role::WindowTitle as usize] = cga(Color16::White, Color16::Blue);
+        // The active title pops (bright white, bold); inactive ones recede to the
+        // dimmer frame grey so the focused window reads at a glance.
+        styles[Role::WindowTitle as usize] =
+            cga(Color16::White, Color16::Blue).attrs(Attributes::BOLD);
+        styles[Role::WindowTitleInactive as usize] = cga(Color16::LightGray, Color16::Blue);
         styles[Role::MenuBar as usize] = cga(Color16::Black, Color16::LightGray);
         styles[Role::MenuSelected as usize] = cga(Color16::Black, Color16::Green);
         styles[Role::MenuDisabled as usize] = cga(Color16::DarkGray, Color16::LightGray);
@@ -109,6 +119,9 @@ impl Default for Theme {
         styles[Role::Selection as usize] = cga(Color16::Black, Color16::Cyan);
         styles[Role::DialogBackground as usize] = cga(Color16::Black, Color16::LightGray);
         styles[Role::Input as usize] = cga(Color16::Black, Color16::White);
+        // The classic TurboVision shadow: whatever shows through is repainted
+        // dark-gray on black, so it reads as "in shadow" without hiding the glyph.
+        styles[Role::Shadow as usize] = cga(Color16::DarkGray, Color16::Black);
         Self { styles }
     }
 }
@@ -143,6 +156,21 @@ mod tests {
             cga(Color16::Black, Color16::LightGray)
         );
         assert_eq!(t.style(Role::Input), cga(Color16::Black, Color16::White));
+        // Phase 10 drop shadow.
+        assert_eq!(
+            t.style(Role::Shadow),
+            cga(Color16::DarkGray, Color16::Black)
+        );
+        // Phase 10 active/inactive window titles: active is bright + bold, inactive
+        // recedes to the dimmer frame grey.
+        assert_eq!(
+            t.style(Role::WindowTitle),
+            cga(Color16::White, Color16::Blue).attrs(Attributes::BOLD)
+        );
+        assert_eq!(
+            t.style(Role::WindowTitleInactive),
+            cga(Color16::LightGray, Color16::Blue)
+        );
     }
 
     #[test]

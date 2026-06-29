@@ -824,6 +824,20 @@ pub struct ScrollMetrics {
     pub left: i16,
 }
 
+impl ScrollMetrics {
+    /// Whether a vertical scroll bar is warranted: the document has more lines
+    /// than the viewport can show at once.
+    pub fn needs_vertical(&self) -> bool {
+        self.lines > self.viewport.height.max(0) as usize
+    }
+
+    /// Whether a horizontal scroll bar is warranted: the widest line runs past
+    /// the right edge of the viewport.
+    pub fn needs_horizontal(&self) -> bool {
+        self.content_width > self.viewport.width.max(0)
+    }
+}
+
 /// The total display width of `line`: the column just past its last grapheme,
 /// with tabs expanded to `tab_width` stops and wide graphemes counted as two.
 fn display_width(line: &str, tab_width: usize) -> i16 {
@@ -1659,5 +1673,25 @@ mod tests {
         assert_eq!(e.cursor(), Position::new(0, 0), "the caret stays put");
         mouse(&mut e, MouseKind::ScrollUp, 0, 0);
         assert_eq!(e.scroll_metrics().top, 0);
+    }
+
+    #[test]
+    fn scroll_metrics_report_when_a_bar_is_needed() {
+        // A document that fits the viewport in both axes needs neither bar.
+        let mut e = editor(20, 4);
+        e.set_text("short\ntext");
+        let m = e.scroll_metrics();
+        assert!(!m.needs_vertical(), "two lines fit in four rows");
+        assert!(!m.needs_horizontal(), "no line is wider than 20 columns");
+
+        // More lines than rows wants a vertical bar.
+        let mut tall = editor(20, 3);
+        tall.set_text("a\nb\nc\nd\ne");
+        assert!(tall.scroll_metrics().needs_vertical());
+
+        // A line wider than the viewport wants a horizontal bar.
+        let mut wide = editor(8, 4);
+        wide.set_text("this line is far wider than eight columns");
+        assert!(wide.scroll_metrics().needs_horizontal());
     }
 }

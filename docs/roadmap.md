@@ -336,8 +336,8 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   `Drag` state; a `Drag`/`Up` pair advances/ends it, clamped to the desktop and a
   minimum size). The glyph column spans come from new `Frame::close_span`/
   `zoom_span` so the hit-test matches what is drawn; grabbing a maximised window
-  un-zooms it first. *Still deferred:* dragging a scroll-bar thumb (needs a
-  `Drag::ScrollThumb` variant inverting `thumb_offset`).
+  un-zooms it first. Thumb dragging landed in Phase 10 (a `Drag::ScrollThumb`
+  variant + `ScrollBar::pos_at` inverting the thumb placement).
 - **9e** Dialog controls.
   - **9e.1 ✅** Focus-on-click + activate controls — `Group::dispatch_positional`
     now focuses the clicked focusable child (TV click-to-focus, via a shared
@@ -357,6 +357,29 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 
 ## Phase 10 — Polish & cross-platform
 
+- **Cosmetic ✅** — two TurboVision touches the chrome was missing:
+  - *Conditional scroll bars.* An editor window draws a scroll bar only when its
+    document overflows that axis (`ScrollMetrics::needs_vertical`/`needs_horizontal`):
+    more lines than the viewport, or a line wider than it. Drawing *and* mouse
+    hit-testing share the predicate, so a hidden bar isn't clickable.
+  - *Drop shadows.* A new `Canvas::shadow(area, style)` casts the classic TV shadow
+    — a two-column strip down the right and a one-row strip below, offset `(2, 1)`,
+    each cell dimmed in place (`Role::Shadow` = dark-gray on black) rather than
+    blanked. Editor windows cast it on the desktop (drawn before each window, so a
+    window sits on its own shadow); `exec_view` casts it under every modal.
+  - *Active window title.* The focused window's title is bright + bold
+    (`Role::WindowTitle`); inactive ones recede to a dimmer grey
+    (`Role::WindowTitleInactive`), so the editing window reads at a glance.
+  - *Zoom glyph state.* The frame's zoom glyph shows `[↑]` (maximise) at normal
+    size and `[↕]` (restore) when maximised (`Frame::maximized`).
+- **MDI fixes** building on the Phase 9 mouse work:
+  - *Scroll-bar thumb dragging.* Pressing the thumb starts a `Drag::ScrollThumb`;
+    the drag pans the editor so the thumb tracks the pointer (`ScrollBar::pos_at`).
+    A `selecting` flag means a drag begun on a scroll bar or the frame never leaks
+    into a text selection (the bug that made a thumb-drag select the document).
+  - *Closeable to an empty desktop.* Closing the last window no longer resets it
+    to a fresh Untitled — the desktop can be emptied; New/Open spawn a window
+    again, and document-dependent commands/keys quietly no-op while it is empty.
 - Verify on Windows and macOS; iron out terminal quirks.
 - OSC 52 system clipboard (works over SSH, no crate).
 - Settings persistence (hand-rolled key-value format — no serde).

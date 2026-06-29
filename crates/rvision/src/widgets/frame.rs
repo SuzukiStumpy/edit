@@ -42,15 +42,21 @@ const DOUBLE: BorderGlyphs = BorderGlyphs {
     vertical: '║',
 };
 
-/// The close glyph drawn near the top-left corner (decorative until Phase 9).
+/// The close glyph drawn near the top-left corner.
 const CLOSE: &str = "[■]";
-/// The zoom glyph drawn near the top-right corner (decorative until Phase 9).
+/// The zoom glyph drawn near the top-right corner when the window is at its
+/// normal size: a single up-arrow inviting the user to maximise it.
 const ZOOM: &str = "[↑]";
+/// The zoom glyph when the window is maximised: a double-headed arrow inviting a
+/// restore back to its normal size. Same width as [`ZOOM`], so the hit-test span
+/// is unchanged.
+const ZOOM_MAXIMIZED: &str = "[↕]";
 
 /// A window frame: border, centred title, and close/zoom glyphs.
 pub struct Frame {
     title: String,
     active: bool,
+    maximized: bool,
     style: Style,
     title_style: Style,
 }
@@ -62,6 +68,7 @@ impl Frame {
         Self {
             title: title.to_string(),
             active: false,
+            maximized: false,
             style,
             title_style,
         }
@@ -70,6 +77,13 @@ impl Frame {
     /// Marks the frame active (a doubled border) or not (a single one).
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self
+    }
+
+    /// Marks the window maximised, so the zoom glyph shows a restore (↕) arrow
+    /// instead of the maximise (↑) one.
+    pub fn maximized(mut self, maximized: bool) -> Self {
+        self.maximized = maximized;
         self
     }
 
@@ -118,8 +132,9 @@ impl Frame {
         let top = 0;
         let (left, right) = match (Self::close_span(w), Self::zoom_span(w)) {
             (Some(close), Some(zoom)) => {
+                let zoom_glyph = if self.maximized { ZOOM_MAXIMIZED } else { ZOOM };
                 canvas.put_str(Point::new(close.start, top), CLOSE, self.style);
-                canvas.put_str(Point::new(zoom.start, top), ZOOM, self.style);
+                canvas.put_str(Point::new(zoom.start, top), zoom_glyph, self.style);
                 (close.end, zoom.start)
             }
             _ => (1, w - 1),
@@ -208,6 +223,23 @@ mod tests {
         // Too narrow (8 < 10) for close/zoom; still a tidy single-line box.
         let frame = Frame::new("X", Style::new(), Style::new());
         insta::assert_snapshot!(render(&frame, 8, 3));
+    }
+
+    #[test]
+    fn the_zoom_glyph_reflects_the_maximised_state() {
+        let normal = Frame::new("Doc", Style::new(), Style::new());
+        assert!(
+            render(&normal, 20, 3).contains('↑'),
+            "normal shows the ↑ glyph"
+        );
+        assert!(!render(&normal, 20, 3).contains('↕'));
+
+        let maxed = Frame::new("Doc", Style::new(), Style::new()).maximized(true);
+        assert!(
+            render(&maxed, 20, 3).contains('↕'),
+            "maximised shows the ↕ glyph"
+        );
+        assert!(!render(&maxed, 20, 3).contains('↑'));
     }
 
     #[test]

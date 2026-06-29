@@ -128,6 +128,30 @@ impl ScrollBar {
             std::cmp::Ordering::Equal => ScrollPart::Thumb,
         })
     }
+
+    /// Maps a `point` along the bar to the scroll position its thumb would sit at —
+    /// the inverse of [`thumb_offset`](Self::thumb_offset), for dragging the thumb.
+    /// Result is in `0..=total - visible`; points on or before the start arrow map
+    /// to `0`, on or after the end arrow to the maximum.
+    pub fn pos_at(&self, point: Point) -> usize {
+        let (len, off) = match self.orientation {
+            Orientation::Vertical => (self.bounds.height(), point.y - self.bounds.origin().y),
+            Orientation::Horizontal => (self.bounds.width(), point.x - self.bounds.origin().x),
+        };
+        let max_pos = self.total.saturating_sub(self.visible);
+        if max_pos == 0 {
+            return 0;
+        }
+        // The track is the cells between the arrows: offsets 1..=len-2 carry thumb
+        // positions 0..=span. Too short a bar to have a track: snap to an end.
+        let track_len = len - 2;
+        if track_len <= 1 {
+            return if off <= len / 2 { 0 } else { max_pos };
+        }
+        let span = (track_len - 1) as usize;
+        let t = (off - 1).clamp(0, track_len - 1) as usize;
+        ((t * max_pos + span / 2) / span).min(max_pos)
+    }
 }
 
 impl View for ScrollBar {
@@ -258,6 +282,22 @@ mod tests {
         let bar = vbar(6); // thumb at row 4
         assert_eq!(bar.hit(Point::new(0, 2)), Some(ScrollPart::PageUp));
         assert_eq!(bar.hit(Point::new(0, 4)), Some(ScrollPart::Thumb));
+    }
+
+    #[test]
+    fn pos_at_inverts_the_thumb_placement() {
+        // 10 items, 4 visible: max_pos 6, track rows 1..5 (offsets 1..=4, span 3).
+        let bar = vbar(0);
+        // The track ends map to the scroll extremes.
+        assert_eq!(bar.pos_at(Point::new(0, 1)), 0);
+        assert_eq!(bar.pos_at(Point::new(0, 4)), 6);
+        // A mid-track cell lands proportionally between them.
+        assert_eq!(bar.pos_at(Point::new(0, 2)), 2);
+        assert_eq!(bar.pos_at(Point::new(0, 3)), 4);
+        // Points on/beyond the arrows clamp to the ends, not past them.
+        assert_eq!(bar.pos_at(Point::new(0, 0)), 0);
+        assert_eq!(bar.pos_at(Point::new(0, 5)), 6);
+        assert_eq!(bar.pos_at(Point::new(0, 99)), 6);
     }
 
     #[test]
