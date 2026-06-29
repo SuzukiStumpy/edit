@@ -25,6 +25,14 @@ pub trait Backend {
     /// Presents a finished frame: diffs it against the current screen and makes
     /// the changed cells visible. Fallible because a real flush is terminal I/O.
     fn present(&mut self, frame: &Buffer) -> io::Result<()>;
+
+    /// Copies `text` to the host's system clipboard, if the backend can reach it.
+    /// The real backend emits an OSC 52 escape (ADR 0021); the default is a no-op,
+    /// so a backend with no terminal (or no clipboard) simply drops the request.
+    fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+        let _ = text;
+        Ok(())
+    }
 }
 
 /// The input half of the seam: a source of [`Event`]s (ADR 0002, 0004).
@@ -43,6 +51,7 @@ pub struct TestBackend {
     screen: Buffer,
     last_changes: usize,
     presents: usize,
+    clipboard: Option<String>,
 }
 
 impl TestBackend {
@@ -52,7 +61,14 @@ impl TestBackend {
             screen: Buffer::new(size),
             last_changes: 0,
             presents: 0,
+            clipboard: None,
         }
+    }
+
+    /// The text most recently pushed to the system clipboard via
+    /// [`set_clipboard`](Backend::set_clipboard), or `None` if none was (ADR 0021).
+    pub fn clipboard(&self) -> Option<&str> {
+        self.clipboard.as_deref()
     }
 
     /// The current on-screen contents.
@@ -85,6 +101,11 @@ impl Backend for TestBackend {
         self.last_changes = frame.diff(&self.screen).len();
         self.screen = frame.clone();
         self.presents += 1;
+        Ok(())
+    }
+
+    fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+        self.clipboard = Some(text.to_string());
         Ok(())
     }
 }
@@ -124,6 +145,16 @@ mod tests {
         backend.present(&frame).unwrap(); // identical frame
         assert_eq!(backend.last_changes(), 0, "minimal update: nothing changed");
         assert_eq!(backend.presents(), 2);
+    }
+
+    #[test]
+    fn set_clipboard_records_the_last_text() {
+        let mut backend = TestBackend::new(Size::new(4, 1));
+        assert_eq!(backend.clipboard(), None, "nothing pushed yet");
+        backend.set_clipboard("hello").unwrap();
+        assert_eq!(backend.clipboard(), Some("hello"));
+        backend.set_clipboard("world").unwrap();
+        assert_eq!(backend.clipboard(), Some("world"), "keeps the most recent");
     }
 
     #[test]

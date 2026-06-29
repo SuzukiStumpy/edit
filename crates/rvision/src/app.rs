@@ -85,6 +85,16 @@ impl<T: Backend + EventSource> Application<T> {
         &mut self.terminal
     }
 
+    /// Pushes `text` to the host system clipboard through the backend (OSC 52 on
+    /// a real terminal, a no-op on a backend that cannot reach one — ADR 0021).
+    ///
+    /// # Errors
+    ///
+    /// Propagates any I/O error from writing to the terminal.
+    pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+        self.terminal.set_clipboard(text)
+    }
+
     /// Runs the loop until `program` reports it is finished.
     ///
     /// Each turn: build a frame at the terminal's current size, `draw`, `present`,

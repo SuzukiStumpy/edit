@@ -387,7 +387,10 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
     to a fresh Untitled — the desktop can be emptied; New/Open spawn a window
     again, and document-dependent commands/keys quietly no-op while it is empty.
 - Verify on Windows and macOS; iron out terminal quirks.
-- OSC 52 system clipboard (works over SSH, no crate).
+- **OSC 52 system clipboard ✅** — Cut/Copy mirror to the host clipboard (works
+  over SSH) via `Backend::set_clipboard` + a hand-rolled Base64 `osc52` encoder
+  (no crate). Write-only: Paste reads the internal buffer; read-back is left
+  behind the seam as fragile/terminal-gated (ADR 0021).
 - Settings persistence (hand-rolled key-value format — no serde).
 - Help system: a simplified viewer + content; About box.
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
@@ -396,7 +399,7 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 
 ## Deferred decisions (settled when their phase arrives)
 
-- **System clipboard** — internal → OSC 52 (Phase 7/10).
+- **System clipboard** — internal → OSC 52 ✅ write-only (Phase 7 / 10, ADR 0021).
 - **Settings format** — hand-rolled key-value (Phase 10).
 - **Help system** — TV's hypertext help is large; ship a simplified viewer
   (Phase 10).

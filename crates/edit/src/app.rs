@@ -1018,6 +1018,12 @@ impl EditorApp {
         }
     }
 
+    /// The current clipboard contents. The driver mirrors this to the host system
+    /// clipboard after a Cut/Copy (OSC 52, ADR 0021); Paste reads it directly.
+    pub fn clipboard(&self) -> &str {
+        &self.clipboard
+    }
+
     /// The window draw order, bottom-to-top: inactive windows in z-order, then the
     /// active one on top. A zoomed active window covers the desktop, so only it is
     /// drawn.
@@ -1183,8 +1189,13 @@ fn handle_command<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    // Clipboard commands need no dialog/terminal; act on them first (ADR 0019).
+    // Clipboard commands need no dialog; act on them first (ADR 0019). Cut/Copy
+    // also mirror the internal clipboard to the host via OSC 52 — write-only, so
+    // Paste still reads the internal buffer (ADR 0021).
     if ed.handle_clipboard(command) {
+        if matches!(command, CM_COPY | CM_CUT) {
+            app.set_clipboard(ed.clipboard())?;
+        }
         return Ok(());
     }
     // On an empty desktop only New/Open (and Quit) do anything; the rest need a
@@ -1523,6 +1534,67 @@ mod tests {
         type_chars(&mut ed, "x");
         assert!(ed.handle_clipboard(CM_PASTE));
         assert_eq!(ed.active_editor().text(), "x");
+    }
+
+    // --- system clipboard (OSC 52, ADR 0021) ---
+
+    /// A headless terminal that records what the driver pushes to the host
+    /// clipboard, so a test can assert Cut/Copy mirror it and Paste does not.
+    #[derive(Default)]
+    struct ClipTerminal {
+        clipboard: Option<String>,
+    }
+
+    impl Backend for ClipTerminal {
+        fn size(&self) -> Size {
+            Size::new(40, 12)
+        }
+        fn present(&mut self, _frame: &Buffer) -> io::Result<()> {
+            Ok(())
+        }
+        fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+            self.clipboard = Some(text.to_string());
+            Ok(())
+        }
+    }
+
+    impl EventSource for ClipTerminal {
+        fn poll_event(&mut self, _timeout: std::time::Duration) -> io::Result<Option<Event>> {
+            Ok(None)
+        }
+    }
+
+    /// Selects "abc" in a fresh editor, ready for a clipboard command.
+    fn ed_with_selection() -> EditorApp {
+        let mut ed = app();
+        type_chars(&mut ed, "abc");
+        run_key(&mut ed, KeyCode::Home, Modifiers::CONTROL);
+        run_key(&mut ed, KeyCode::End, Modifiers::SHIFT); // select "abc"
+        ed
+    }
+
+    #[test]
+    fn cut_and_copy_mirror_the_text_to_the_system_clipboard() {
+        for command in [CM_COPY, CM_CUT] {
+            let mut ed = ed_with_selection();
+            let mut sys = Application::new(ClipTerminal::default());
+            handle_command(command, &mut sys, &mut ed, &Theme::default()).unwrap();
+            assert_eq!(
+                sys.terminal().clipboard.as_deref(),
+                Some("abc"),
+                "{command:?} should push the selection to the host clipboard"
+            );
+        }
+    }
+
+    #[test]
+    fn paste_does_not_touch_the_system_clipboard() {
+        // Write-only OSC 52: Paste reads the internal buffer, emits no escape.
+        let mut ed = ed_with_selection();
+        run_key(&mut ed, KeyCode::Char('c'), Modifiers::CONTROL); // fill internal clipboard
+        let mut sys = Application::new(ClipTerminal::default());
+        handle_command(CM_PASTE, &mut sys, &mut ed, &Theme::default()).unwrap();
+        assert_eq!(sys.terminal().clipboard, None);
     }
 
     #[test]

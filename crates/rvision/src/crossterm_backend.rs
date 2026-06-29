@@ -97,6 +97,13 @@ impl Backend for CrosstermBackend {
         self.front = frame.clone();
         Ok(())
     }
+
+    fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+        // Write the OSC 52 escape raw — it is not a crossterm command (ADR 0021).
+        let mut out = io::stdout().lock();
+        out.write_all(crate::osc52::set_clipboard(text).as_bytes())?;
+        out.flush()
+    }
 }
 
 impl EventSource for CrosstermBackend {

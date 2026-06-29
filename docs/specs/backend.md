@@ -25,6 +25,9 @@ pub trait Backend {
     /// Present a finished frame: diff it against the current screen and make the
     /// changed cells visible. Fallible because a real flush does terminal I/O.
     fn present(&mut self, frame: &Buffer) -> io::Result<()>;
+    /// Copy `text` to the host system clipboard if the backend can reach one.
+    /// Default no-op; CrosstermBackend emits OSC 52 write-only (ADR 0021).
+    fn set_clipboard(&mut self, text: &str) -> io::Result<()> { Ok(()) }
 }
 
 pub trait EventSource {
@@ -35,13 +38,14 @@ pub trait EventSource {
 
 /// Headless backend for tests: keeps the "screen" in memory and records what the
 /// last present would have changed.
-pub struct TestBackend { /* screen: Buffer, last_changes: usize, presents: usize */ }
+pub struct TestBackend { /* screen, last_changes, presents, clipboard: Option<String> */ }
 impl TestBackend {
     fn new(size: Size) -> Self;
     fn screen(&self) -> &Buffer;     // current on-screen contents
     fn to_text(&self) -> String;     // convenience over screen().to_text()
     fn last_changes(&self) -> usize; // cells emitted by the most recent present
     fn presents(&self) -> usize;     // number of present() calls
+    fn clipboard(&self) -> Option<&str>; // last text pushed via set_clipboard (ADR 0021)
 }
 impl Backend for TestBackend { /* ... */ }
 ```
