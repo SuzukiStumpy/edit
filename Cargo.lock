@@ -54,6 +54,7 @@ dependencies = [
 name = "edit"
 version = "0.0.0"
 dependencies = [
+ "insta",
  "rvision",
  "unicode-segmentation",
 ]

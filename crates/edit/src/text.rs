@@ -149,6 +149,29 @@ pub trait TextBuffer {
         }
     }
 
+    /// The document text from `start` up to (not including) `end`, with line
+    /// breaks as `'\n'` — the exact shape an [`Edit::delete`] at `start` would
+    /// remove. `start` must not come after `end`; a column past a line's end
+    /// clamps to it. Used for selection copy/replace.
+    fn slice(&self, start: Position, end: Position) -> String {
+        if start.line == end.line {
+            let line = self.line(start.line).unwrap_or("");
+            let a = byte_of_column(line, start.column);
+            let b = byte_of_column(line, end.column);
+            return line[a.min(b)..a.max(b)].to_string();
+        }
+        let first = self.line(start.line).unwrap_or("");
+        let mut out = first[byte_of_column(first, start.column)..].to_string();
+        for index in (start.line + 1)..end.line {
+            out.push('\n');
+            out.push_str(self.line(index).unwrap_or(""));
+        }
+        out.push('\n');
+        let last = self.line(end.line).unwrap_or("");
+        out.push_str(&last[..byte_of_column(last, end.column)]);
+        out
+    }
+
     /// The whole document as a single string, lines joined by `'\n'`.
     fn to_text(&self) -> String {
         (0..self.line_count())
@@ -283,6 +306,23 @@ mod tests {
         doc.apply(&Edit::delete(Position::new(0, 2), "X\nY"));
         assert_eq!(doc.to_text(), "abcd");
         assert_eq!(doc.line_count(), 1);
+    }
+
+    #[test]
+    fn slice_within_and_across_lines() {
+        let doc = LineArray::from("alpha\nbeta\ngamma");
+        // Within one line.
+        assert_eq!(doc.slice(Position::new(0, 1), Position::new(0, 4)), "lph");
+        // Across lines: tail of first, whole middle, head of last.
+        assert_eq!(
+            doc.slice(Position::new(0, 3), Position::new(2, 2)),
+            "ha\nbeta\nga"
+        );
+        // A slice is exactly what a Delete of that text would remove.
+        let mut work = doc.clone();
+        let span = doc.slice(Position::new(0, 3), Position::new(2, 2));
+        work.apply(&Edit::delete(Position::new(0, 3), span));
+        assert_eq!(work.to_text(), "alpmma");
     }
 
     #[test]

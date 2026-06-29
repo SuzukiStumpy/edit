@@ -205,18 +205,44 @@ keyboard-driven with the terminal always restored.
 
 ---
 
-## Phase 6 — Editor, single document
+## Phase 6 — Editor, single document ✅
 
-- `editor::EditorView`: render a `TextBuffer` with viewport/scroll, cursor, and
-  selection rendering.
-- Cursor movement: by grapheme, word, line, page, home/end, document ends.
-- Editing: insert/delete/newline/tab (all via reversible `Edit`).
-- File ops: New/Open/Save/Save As through the file dialog; EOL detect-and-preserve;
-  UTF-8 via the decode/encode seam (ADR 0010).
-- One editor window on the desktop, wired to menu/status commands.
+- `editor::EditorView` (in `edit`): renders the owned document with
+  viewport/scroll, a reverse-video caret, and a highlighted selection; display
+  geometry (tab expansion, wide graphemes) lives in one `line_columns` helper so
+  rendering and vertical motion can never disagree. ✅
+- Cursor movement: by grapheme, word (Ctrl-←/→), line, page, home/end, document
+  ends (Ctrl-Home/End); vertical motion keeps a sticky goal column. ✅
+- Editing: insert/newline/tab/backspace/delete, all through reversible `Edit`s; a
+  selection is replaced by typing. ✅
+- `edit::file`: the decode/encode seam — UTF-8 (BOM preserved), EOL
+  detect-and-preserve, lossy load for non-UTF-8 (ADR 0010). ✅
+- `edit::app`: one framed editor window between a menu bar and status line, wired
+  to New/Open/Save/Save As/Exit; the binary `edit [FILE]` runs it. ✅
 
-**Tests first:** scripted typing/editing scenarios; viewport scrolls to keep the
-cursor visible; round-trip a file preserving its EOL style.
+**Decisions made while building (see `docs/specs/editor.md`, `file.md`, `app.md`,
+ADR 0018):**
+- **The editor uses a bespoke driver loop, not `Application::run` + `Root`**
+  (ADR 0018). Modal file dialogs go through `exec_view`, which owns the terminal
+  and so can't be called from inside the view tree; the generic `Root` offers no
+  hook to interleave one. `edit::app::EditorApp` owns the `EditorView`
+  **concretely** (no downcast, no shared `Rc<RefCell>`) and its `dispatch` returns
+  the posted commands, so the driver can run the dialog and load/save directly.
+- **The document is `'\n'`-only inside; the file seam is the one place that knows
+  about CRLF/CR/BOM** — so EOL style and a final-newline survive a load/save
+  untouched (ADR 0010), proven by a byte-exact round-trip test.
+- **Selection rendering lands now; clipboard and the undo *stack* are Phase 7** —
+  editing already flows through reversible `Edit`s, and `selected_text()` sets up
+  the clipboard.
+
+**Tests (done):** scripted typing/editing scenarios; goal-column motion across
+short/long lines; viewport scroll keeps the cursor visible; selection replace;
+byte-exact file round-trip per EOL style; open-then-save preserves CRLF; command
+routing (menu/editor/status) without a terminal. `cargo run -p edit` is the
+on-a-real-terminal check (open/edit/save, resize, always-restored terminal).
+
+**Exit (met):** `cargo test` green (42 `edit` + 180 `rvision`); a working
+single-document editor with menus, a status line, and modal Open/Save dialogs.
 
 ---
 

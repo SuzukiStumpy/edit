@@ -1,0 +1,5 @@
+---
+source: crates/edit/src/editor.rs
+expression: "render(&e, 8, 1)"
+---
+fghijkl

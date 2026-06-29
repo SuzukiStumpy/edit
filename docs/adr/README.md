@@ -22,5 +22,7 @@ rewriting an old one.
 | [0014](0014-documentation-process.md) | Full documentation process |
 | [0015](0015-view-coordinates-canvas.md) | Owner-relative view coordinates via a translating `Canvas` |
 | [0016](0016-application-shell-menu-overlay.md) | `TProgram`-style application shell + drawn menu overlay |
+| [0017](0017-modal-dialogs-and-focus-aware-controls.md) | Modal dialogs via `exec_view` + focus-aware controls (`set_focused`) |
+| [0018](0018-editor-app-bespoke-driver-loop.md) | Editor uses a bespoke driver loop interleaving `exec_view` |
 
 New decision? Copy [`0000-template.md`](0000-template.md).

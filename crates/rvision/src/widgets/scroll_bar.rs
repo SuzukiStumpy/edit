@@ -1,9 +1,10 @@
-//! A vertical scroll-bar indicator (TurboVision's `TScrollBar`).
+//! A scroll-bar indicator (TurboVision's `TScrollBar`), vertical or horizontal.
 //!
-//! A drawn indicator only: up/down arrows, a track, and a thumb whose position
+//! A drawn indicator only: a pair of arrows, a track, and a thumb whose position
 //! reflects how far a viewport has scrolled. Dragging it with the mouse is Phase
-//! 9 (ADR 0007); for now a [`ListBox`](super::ListBox) draws one to show where
-//! its selection sits in a longer list.
+//! 9 (ADR 0007); for now a [`ListBox`](super::ListBox) draws a vertical one to
+//! show where its selection sits, and the editor draws both along its window
+//! frame to show its position in a longer/wider document.
 
 use crate::canvas::Canvas;
 use crate::cell::Cell;
@@ -13,12 +14,24 @@ use crate::view::View;
 
 const UP: char = '▲';
 const DOWN: char = '▼';
+const LEFT: char = '◄';
+const RIGHT: char = '►';
 const TRACK: char = '▒';
 const THUMB: char = '█';
 
-/// A vertical scroll bar one column wide.
+/// Which way a [`ScrollBar`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    /// Runs top-to-bottom, one column wide (▲/▼ arrows).
+    Vertical,
+    /// Runs left-to-right, one row tall (◄/► arrows).
+    Horizontal,
+}
+
+/// A scroll bar one cell thick, running the length of its [`bounds`](ScrollBar::bounds).
 pub struct ScrollBar {
     bounds: Rect,
+    orientation: Orientation,
     total: usize,
     visible: usize,
     pos: usize,
@@ -26,10 +39,21 @@ pub struct ScrollBar {
 }
 
 impl ScrollBar {
-    /// Creates a scroll bar at `bounds` drawn in `style`, initially empty.
+    /// Creates a vertical scroll bar at `bounds` drawn in `style`, initially empty.
     pub fn new(bounds: Rect, style: Style) -> Self {
+        Self::with_orientation(bounds, style, Orientation::Vertical)
+    }
+
+    /// Creates a horizontal scroll bar at `bounds` drawn in `style`.
+    pub fn horizontal(bounds: Rect, style: Style) -> Self {
+        Self::with_orientation(bounds, style, Orientation::Horizontal)
+    }
+
+    /// Creates a scroll bar with an explicit [`Orientation`].
+    pub fn with_orientation(bounds: Rect, style: Style, orientation: Orientation) -> Self {
         Self {
             bounds,
+            orientation,
             total: 0,
             visible: 1,
             pos: 0,
@@ -66,23 +90,37 @@ impl View for ScrollBar {
     }
 
     fn draw(&self, canvas: &mut Canvas) {
-        let h = canvas.bounds().height();
-        if h <= 0 {
+        let size = canvas.bounds().size();
+        // The bar's length along its run; the cross-axis is one cell thick.
+        let len = match self.orientation {
+            Orientation::Vertical => size.height,
+            Orientation::Horizontal => size.width,
+        };
+        if len <= 0 {
             return;
         }
-        if h == 1 {
-            canvas.set(Point::new(0, 0), Cell::from_char(THUMB, self.style));
+        // Map an offset along the run to a local point on the (one-cell) cross-axis.
+        let at = |i: i16| match self.orientation {
+            Orientation::Vertical => Point::new(0, i),
+            Orientation::Horizontal => Point::new(i, 0),
+        };
+        let (start_arrow, end_arrow) = match self.orientation {
+            Orientation::Vertical => (UP, DOWN),
+            Orientation::Horizontal => (LEFT, RIGHT),
+        };
+        if len == 1 {
+            canvas.set(at(0), Cell::from_char(THUMB, self.style));
             return;
         }
-        canvas.set(Point::new(0, 0), Cell::from_char(UP, self.style));
-        canvas.set(Point::new(0, h - 1), Cell::from_char(DOWN, self.style));
-        let track_len = h - 2;
-        for y in 1..h - 1 {
-            canvas.set(Point::new(0, y), Cell::from_char(TRACK, self.style));
+        canvas.set(at(0), Cell::from_char(start_arrow, self.style));
+        canvas.set(at(len - 1), Cell::from_char(end_arrow, self.style));
+        let track_len = len - 2;
+        for i in 1..len - 1 {
+            canvas.set(at(i), Cell::from_char(TRACK, self.style));
         }
         if track_len >= 1 {
             let t = self.thumb_offset(track_len);
-            canvas.set(Point::new(0, 1 + t), Cell::from_char(THUMB, self.style));
+            canvas.set(at(1 + t), Cell::from_char(THUMB, self.style));
         }
     }
 }
@@ -114,6 +152,22 @@ mod tests {
         let buf = render(&bar, 6);
         assert_eq!(glyph(&buf, 0), "▲");
         assert_eq!(glyph(&buf, 5), "▼");
+    }
+
+    #[test]
+    fn horizontal_bar_has_left_right_arrows_and_a_tracking_thumb() {
+        let mut bar = ScrollBar::horizontal(
+            Rect::from_origin_size(Point::new(0, 0), Size::new(6, 1)),
+            Style::new(),
+        );
+        bar.set_metrics(10, 4, 6); // scrolled fully right
+        let mut buf = Buffer::new(Size::new(6, 1));
+        let mut canvas = Canvas::new(&mut buf);
+        bar.draw(&mut canvas);
+        let glyph = |x: i16| buf.get(Point::new(x, 0)).unwrap().grapheme().to_string();
+        assert_eq!(glyph(0), "◄");
+        assert_eq!(glyph(5), "►");
+        assert_eq!(glyph(4), "█", "thumb sits just before the right arrow");
     }
 
     #[test]

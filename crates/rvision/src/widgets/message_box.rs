@@ -36,6 +36,17 @@ impl MessageBox {
     pub fn yes_no(title: &str, message: &str, theme: &Theme) -> Dialog {
         build(title, message, &[("Yes", CM_YES), ("No", CM_NO)], theme)
     }
+
+    /// A three-way question — `Yes` (default) / `No` / `Cancel`
+    /// (`CM_YES`/`CM_NO`/`CM_CANCEL`) — for "save changes before…?" prompts.
+    pub fn yes_no_cancel(title: &str, message: &str, theme: &Theme) -> Dialog {
+        build(
+            title,
+            message,
+            &[("Yes", CM_YES), ("No", CM_NO), ("Cancel", CM_CANCEL)],
+            theme,
+        )
+    }
 }
 
 /// One interior cell of horizontal padding on each side; the box is two rows of
@@ -118,6 +129,14 @@ mod tests {
         let d = MessageBox::yes_no("Delete", "Delete file?", &Theme::default());
         assert!(d.ends_on(CM_YES));
         assert!(d.ends_on(CM_NO));
+    }
+
+    #[test]
+    fn yes_no_cancel_ends_on_all_three_answers() {
+        let d = MessageBox::yes_no_cancel("Exit", "Save changes?", &Theme::default());
+        assert!(d.ends_on(CM_YES));
+        assert!(d.ends_on(CM_NO));
+        assert!(d.ends_on(CM_CANCEL));
     }
 
     #[test]

@@ -62,7 +62,15 @@ pub struct RadioButtons { bounds, labels: Vec<String>, selected: usize, focused,
 impl RadioButtons { pub fn new(bounds, labels, theme) -> Self; pub fn selected(&self) -> usize; }
 
 // --- ScrollBar + ListBox ---
-pub struct ScrollBar { bounds, max, pos, vertical, .. }      // a drawn indicator (mouse: Phase 9)
+// A drawn position indicator (mouse drag: Phase 9). Vertical or horizontal
+// (Orientation); the editor draws both along its window frame in Phase 6.
+pub struct ScrollBar { bounds, orientation, total, visible, pos, style }
+impl ScrollBar {
+    pub fn new(bounds: Rect, style: Style) -> Self;            // vertical
+    pub fn horizontal(bounds: Rect, style: Style) -> Self;
+    pub fn with_orientation(bounds: Rect, style: Style, orientation: Orientation) -> Self;
+    pub fn set_metrics(&mut self, total: usize, visible: usize, pos: usize);
+}
 pub struct ListBox { bounds, items: Vec<String>, selected, top, focused, .. }
 impl ListBox {
     pub fn new(bounds: Rect, items: Vec<String>, theme: &Theme) -> Self;

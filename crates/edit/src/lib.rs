@@ -12,4 +12,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod app;
+pub mod editor;
+pub mod file;
 pub mod text;
