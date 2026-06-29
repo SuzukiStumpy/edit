@@ -1,31 +1,47 @@
 # Module spec: `edit::app`
 
-- **Status:** Done
-- **Phase:** 6 (editor, single document) — sub-phase 6c
+- **Status:** Done (Phase 6); extended for MDI (Phase 8)
+- **Phase:** 6 (editor, single document) — sub-phase 6c; 8 (MDI)
 - **Related ADRs:** 0016 (Shell/menu overlay), 0017 (modal dialogs), 0018 (bespoke
-  driver loop), 0010 (file handling)
+  driver loop), 0010 (file handling), 0009 (MDI, phased)
 
 > Note: `docs/specs/app.md` covers `rvision::app` (the framework loop/Shell). This
 > spec is the *editor's* application root, `edit::app`.
 
 ## Purpose
 
-The editor application: the chrome (menu bar, a single framed editor window, a
+The editor application: the chrome (menu bar, the framed editor windows, a
 status line) plus the bespoke driver loop that wires menu/status commands to the
-owned [`EditorView`] and runs the modal file dialogs (ADR 0018). It is the `edit`
+active document and runs the modal file dialogs (ADR 0018). It is the `edit`
 binary's root; `rvision` knows nothing of it.
+
+For MDI (ADR 0009) the app owns a `Vec<Document>` with an active index — each
+`Document` bundles an `EditorView`, the file path, and its [`Encoding`]. They are
+held **concretely**, not as `rvision::Window`/`Box<dyn View>`, so file/edit ops
+reach the editor with no downcast (ADR 0018); this is why the editor does not
+reuse `rvision::Desktop`. Through Phase 8a all windows are maximised, so only the
+active one is drawn; Phase 8b adds the overlapping/cascade/tile/zoom layout.
 
 ## Public interface
 
 ```rust
 pub const CM_NEW / CM_OPEN / CM_SAVE / CM_SAVE_AS: Command;   // CM_QUIT is rvision's
+pub const CM_CLOSE / CM_NEXT_WINDOW / CM_PREV_WINDOW: Command; // Window menu (8a.2)
 
-pub struct EditorApp { /* menu_bar, status_line, editor, size, path, encoding, ... */ }
+struct Document { editor: EditorView, path: Option<PathBuf>, encoding: Encoding } // private
+pub struct EditorApp { /* menu_bar, status_line, documents: Vec<Document>, active, ... */ }
 impl EditorApp {
     pub fn new(size: Size, theme: &Theme) -> Self;
     pub fn relayout(&mut self, size: Size);
     pub fn dispatch(&mut self, event: &Event, commands: &CommandSet) -> Vec<Command>;
-    // terminal-free file ops (unit-tested):
+    pub fn active_editor(&self) -> &EditorView; pub fn active_editor_mut(&mut self) -> &mut _;
+    // windows (terminal-free, unit-tested):
+    pub fn window_count(&self) -> usize; pub fn active_index(&self) -> usize;
+    pub fn new_window(&mut self, theme: &Theme);          // File ▸ New
+    pub fn activate(&mut self, index: usize);             // Alt+1…9
+    pub fn next_window(&mut self); pub fn prev_window(&mut self);  // F6 / Shift-F6
+    pub fn remove_active_window(&mut self);               // Close (last → fresh Untitled)
+    // terminal-free file ops on the active document (unit-tested):
     pub fn new_file(&mut self);
     pub fn open_file(&mut self, path) -> io::Result<bool>;   // bool = decoded lossily
     pub fn open_or_new(&mut self, path) -> io::Result<bool>; // `edit FILE` case
@@ -53,8 +69,17 @@ pub fn run<T: Backend + EventSource>(app: Application<T>, ed: EditorApp, theme: 
 - **Layout:** menu row on top, status row on bottom, the editor window filling the
   middle; the editor's interior is the desktop region inset by the one-cell border;
   resize relays out and re-clamps the editor's scroll.
-- **Discard guard:** New/Open/Exit on a modified document prompt Yes/No/Cancel;
-  Save with no path falls through to Save As; an I/O error shows a message box.
+- **MDI (ADR 0009, Phase 8a.2):** `documents` is never empty; `active` indexes the
+  focused window. New and Open each open a **new** window (the current document
+  keeps its own), so neither prompts. Window switching — Alt+1…9 (`activate`), F6
+  (`next_window`) / Shift-F6 (`prev_window`) — is a pure state change handled
+  inside `dispatch` (a window-key pass between the menu and the editor), so an open
+  menu still swallows those keys. Close (Window menu or Alt-F3) posts `CM_CLOSE`
+  so the driver can run the discard guard first; closing the last window resets it
+  to a fresh Untitled rather than removing it.
+- **Discard guard:** Close on a modified window, and Exit on *any* modified window
+  (`confirm_discard_all` walks every window), prompt Yes/No/Cancel; Save with no
+  path falls through to Save As; an I/O error shows a message box.
 - **Clipboard (ADR 0019):** `EditorApp` owns the `String` clipboard; the editor
   posts `CM_CUT`/`CM_COPY`/`CM_PASTE` (keys or the Edit menu) and `handle_clipboard`
   acts on them — Copy reads `selected_text`, Cut `take_selection`, Paste

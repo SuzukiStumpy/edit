@@ -43,6 +43,14 @@ pub const CM_SAVE: Command = Command(CM_USER + 3);
 /// File ▸ Save As.
 pub const CM_SAVE_AS: Command = Command(CM_USER + 4);
 
+/// Window ▸ Close — close the active window (also Alt-F3). Numbered well above the
+/// editor's own command ids (`CM_USER + 10..18`) to keep the spaces disjoint.
+pub const CM_CLOSE: Command = Command(CM_USER + 30);
+/// Window ▸ Next — activate the next window (also F6).
+pub const CM_NEXT_WINDOW: Command = Command(CM_USER + 31);
+/// Window ▸ Previous — activate the previous window (also Shift-F6).
+pub const CM_PREV_WINDOW: Command = Command(CM_USER + 32);
+
 /// One open document: its editor view, the file's path, and the [`Encoding`] to
 /// preserve on save (ADR 0010). `EditorApp` owns a `Vec<Document>` for MDI
 /// (ADR 0009), concretely rather than as `Box<dyn View>` so file/edit operations
@@ -180,6 +188,14 @@ impl EditorApp {
                         MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G"),
                     ],
                 ),
+                Menu::new(
+                    "Window",
+                    vec![
+                        MenuItem::new("Next", CM_NEXT_WINDOW).with_shortcut("F6"),
+                        MenuItem::new("Previous", CM_PREV_WINDOW).with_shortcut("Shift-F6"),
+                        MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
+                    ],
+                ),
             ],
             theme,
         );
@@ -284,6 +300,84 @@ impl EditorApp {
         self.doc().start_dir()
     }
 
+    // --- window management (terminal-free, unit-tested) ---
+
+    /// The number of open windows (always ≥ 1).
+    pub fn window_count(&self) -> usize {
+        self.documents.len()
+    }
+
+    /// The active window's index.
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    /// Pushes `doc` as a new window on top and makes it active, sizing its editor
+    /// to the (currently maximised) interior.
+    fn add_document(&mut self, mut doc: Document) {
+        doc.editor.set_bounds(inset1(regions(self.size).desktop));
+        self.documents.push(doc);
+        self.active = self.documents.len() - 1;
+    }
+
+    /// Opens a fresh empty window and makes it active (File ▸ New).
+    pub fn new_window(&mut self, theme: &Theme) {
+        self.add_document(Document::new(theme));
+    }
+
+    /// Activates window `index` if it exists (Alt+1…9).
+    pub fn activate(&mut self, index: usize) {
+        if index < self.documents.len() {
+            self.active = index;
+        }
+    }
+
+    /// Activates the next window, wrapping (F6).
+    pub fn next_window(&mut self) {
+        let n = self.documents.len();
+        self.active = (self.active + 1) % n;
+    }
+
+    /// Activates the previous window, wrapping (Shift-F6).
+    pub fn prev_window(&mut self) {
+        let n = self.documents.len();
+        self.active = (self.active + n - 1) % n;
+    }
+
+    /// Removes the active window. The last window is never removed — it is reset to
+    /// a fresh empty document instead, so there is always at least one. Otherwise
+    /// the previous window in z-order becomes active.
+    pub fn remove_active_window(&mut self) {
+        if self.documents.len() == 1 {
+            self.new_file();
+            return;
+        }
+        self.documents.remove(self.active);
+        if self.active >= self.documents.len() {
+            self.active = self.documents.len() - 1;
+        }
+    }
+
+    /// Handles a window-management key. Switching mutates `active` directly (no
+    /// terminal needed); Close posts [`CM_CLOSE`] for the driver's discard guard.
+    /// Returns `Consumed` when it was a window key.
+    fn handle_window_key(&mut self, key: &KeyEvent, ctx: &mut Context) -> EventResult {
+        match (key.code, key.modifiers) {
+            (KeyCode::F(6), Modifiers::NONE) => self.next_window(),
+            (KeyCode::F(6), Modifiers::SHIFT) => self.prev_window(),
+            // Alt-F3 closes; F3 alone stays the editor's Find Next.
+            (KeyCode::F(3), Modifiers::ALT) => {
+                ctx.post(CM_CLOSE);
+                return EventResult::Consumed;
+            }
+            (KeyCode::Char(c), Modifiers::ALT) if c.is_ascii_digit() && c != '0' => {
+                self.activate((c as u8 - b'1') as usize);
+            }
+            _ => return EventResult::Ignored,
+        }
+        EventResult::Consumed
+    }
+
     // --- file operations (terminal-free, unit-tested) ---
 
     /// Resets the active document to empty and unsaved.
@@ -353,9 +447,12 @@ impl EditorApp {
     pub fn dispatch(&mut self, event: &Event, commands: &CommandSet) -> Vec<Command> {
         let mut ctx = Context::new(commands);
         match event {
-            Event::Key(_) => {
-                // menu (pre-process) → active editor (focused) → status (post).
+            Event::Key(key) => {
+                // menu (pre-process) → window keys → active editor → status (post).
                 let mut result = self.menu_bar.handle_event(event, &mut ctx);
+                if result == EventResult::Ignored {
+                    result = self.handle_window_key(key, &mut ctx);
+                }
                 if result == EventResult::Ignored {
                     result = self.doc_mut().editor.handle_event(event, &mut ctx);
                 }
@@ -539,15 +636,14 @@ fn handle_command<T: Backend + EventSource>(
             ed.active_editor_mut().redo();
         }
         CM_QUIT => {
-            if confirm_discard(app, ed, theme)? {
+            // Exit confirms *every* dirty window before quitting (ADR 0009).
+            if confirm_discard_all(app, ed, theme)? {
                 ed.finished = true;
             }
         }
-        CM_NEW => {
-            if confirm_discard(app, ed, theme)? {
-                ed.new_file();
-            }
-        }
+        // New/Open each open a *new* window now — the current document keeps its
+        // own, so there is nothing to discard (ADR 0009).
+        CM_NEW => ed.new_window(theme),
         CM_OPEN => open(app, ed, theme)?,
         CM_SAVE => {
             save(app, ed, theme)?;
@@ -561,6 +657,9 @@ fn handle_command<T: Backend + EventSource>(
         }
         CM_REPLACE => replace(app, ed, theme)?,
         CM_GOTO => go_to_line(app, ed, theme)?,
+        CM_NEXT_WINDOW => ed.next_window(),
+        CM_PREV_WINDOW => ed.prev_window(),
+        CM_CLOSE => close(app, ed, theme)?,
         _ => {}
     }
     Ok(())
@@ -622,8 +721,9 @@ fn go_to_line<T: Backend + EventSource>(
     Ok(())
 }
 
-/// Offers to save unsaved changes before a discarding action. Returns whether it
-/// is OK to proceed (saved, or the user chose to discard); `false` cancels.
+/// Offers to save the active window's unsaved changes before a discarding action.
+/// Returns whether it is OK to proceed (saved, or the user chose to discard);
+/// `false` cancels.
 fn confirm_discard<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
@@ -641,20 +741,49 @@ fn confirm_discard<T: Backend + EventSource>(
     }
 }
 
-/// Runs the Open dialog and loads the chosen file.
+/// Confirms discarding *every* dirty window in turn (for Exit). Activates each so
+/// the prompt and any Save target the right document; a single Cancel aborts and
+/// leaves that window active. Returns whether it is OK to quit.
+fn confirm_discard_all<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<bool> {
+    for i in 0..ed.window_count() {
+        ed.activate(i);
+        if !confirm_discard(app, ed, theme)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Confirms discarding the active window, then closes it (Window ▸ Close). The
+/// last window is reset to a fresh Untitled rather than removed.
+fn close<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<()> {
+    if confirm_discard(app, ed, theme)? {
+        ed.remove_active_window();
+    }
+    Ok(())
+}
+
+/// Runs the Open dialog and loads the chosen file into a **new** window (ADR 0009),
+/// leaving the current document open in its own.
 fn open<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    if !confirm_discard(app, ed, theme)? {
-        return Ok(());
-    }
     let mut dialog = FileDialog::open("Open File", ed.start_dir(), theme);
     if app.exec_view(&mut *ed, &mut dialog)? != CM_OK {
         return Ok(());
     }
     let path = dialog.path();
+    ed.new_window(theme);
     match ed.open_file(path) {
         Ok(true) => message(
             app,
@@ -664,7 +793,11 @@ fn open<T: Backend + EventSource>(
             "File was not valid UTF-8; loaded lossily.",
         ),
         Ok(false) => Ok(()),
-        Err(err) => message(app, ed, theme, "Open failed", &err.to_string()),
+        Err(err) => {
+            // The load failed: drop the empty window we just opened for it.
+            ed.remove_active_window();
+            message(app, ed, theme, "Open failed", &err.to_string())
+        }
     }
 }
 
@@ -996,5 +1129,139 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"!one\r\ntwo\r\n");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    // --- MDI: windows (Phase 8a.2) ---
+
+    const THEME: fn() -> Theme = Theme::default;
+
+    #[test]
+    fn a_fresh_app_has_one_active_window() {
+        let ed = app();
+        assert_eq!(ed.window_count(), 1);
+        assert_eq!(ed.active_index(), 0);
+    }
+
+    #[test]
+    fn new_window_adds_an_empty_document_and_activates_it() {
+        let mut ed = app();
+        type_chars(&mut ed, "first"); // window 0 has content
+        ed.new_window(&THEME());
+        assert_eq!(ed.window_count(), 2);
+        assert_eq!(ed.active_index(), 1);
+        assert_eq!(ed.active_editor().text(), "", "the new window is blank");
+        // Switching back finds the first window's text untouched.
+        ed.activate(0);
+        assert_eq!(ed.active_editor().text(), "first");
+    }
+
+    #[test]
+    fn new_menu_command_spawns_a_window_rather_than_replacing() {
+        let mut ed = app();
+        keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: New
+        assert_eq!(posted, vec![CM_NEW]);
+    }
+
+    #[test]
+    fn typing_targets_only_the_active_window() {
+        let mut ed = app();
+        ed.new_window(&THEME());
+        type_chars(&mut ed, "two");
+        ed.activate(0);
+        assert_eq!(ed.active_editor().text(), "", "window 0 stayed empty");
+        ed.activate(1);
+        assert_eq!(ed.active_editor().text(), "two");
+    }
+
+    #[test]
+    fn alt_digit_switches_to_that_window() {
+        let mut ed = app();
+        ed.new_window(&THEME()); // index 1
+        ed.new_window(&THEME()); // index 2
+        keydown(&mut ed, KeyCode::Char('1'), Modifiers::ALT);
+        assert_eq!(ed.active_index(), 0);
+        keydown(&mut ed, KeyCode::Char('3'), Modifiers::ALT);
+        assert_eq!(ed.active_index(), 2);
+        // Out-of-range digit is a no-op (only three windows).
+        keydown(&mut ed, KeyCode::Char('9'), Modifiers::ALT);
+        assert_eq!(ed.active_index(), 2);
+    }
+
+    #[test]
+    fn f6_and_shift_f6_cycle_windows_with_wraparound() {
+        let mut ed = app();
+        ed.new_window(&THEME()); // index 1
+        ed.new_window(&THEME()); // index 2, active
+        keydown(&mut ed, KeyCode::F(6), Modifiers::NONE); // wraps 2 -> 0
+        assert_eq!(ed.active_index(), 0);
+        keydown(&mut ed, KeyCode::F(6), Modifiers::SHIFT); // back 0 -> 2
+        assert_eq!(ed.active_index(), 2);
+    }
+
+    #[test]
+    fn the_window_menu_posts_next_previous_and_close() {
+        let mut ed = app();
+        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT); // open Window (Next highlighted)
+        assert!(ed.menu_is_open());
+        assert_eq!(
+            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
+            vec![CM_NEXT_WINDOW]
+        );
+        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT);
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Previous
+        assert_eq!(
+            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
+            vec![CM_PREV_WINDOW]
+        );
+        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT);
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Previous
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Close
+        assert_eq!(
+            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
+            vec![CM_CLOSE]
+        );
+    }
+
+    #[test]
+    fn alt_f3_posts_close_but_f3_alone_does_not() {
+        let mut ed = app();
+        assert_eq!(
+            keydown(&mut ed, KeyCode::F(3), Modifiers::ALT),
+            vec![CM_CLOSE]
+        );
+        // F3 alone is the editor's Find Next; it posts no window command.
+        assert!(keydown(&mut ed, KeyCode::F(3), Modifiers::NONE).is_empty());
+    }
+
+    #[test]
+    fn removing_a_window_activates_a_neighbour() {
+        let mut ed = app();
+        ed.new_window(&THEME()); // 1
+        ed.new_window(&THEME()); // 2, active
+        ed.remove_active_window();
+        assert_eq!(ed.window_count(), 2);
+        assert_eq!(ed.active_index(), 1, "the previous window becomes active");
+    }
+
+    #[test]
+    fn closing_the_last_window_leaves_a_fresh_untitled() {
+        let mut ed = app();
+        type_chars(&mut ed, "stuff");
+        ed.documents[ed.active].path = Some(PathBuf::from("/tmp/x.txt"));
+        ed.remove_active_window();
+        assert_eq!(ed.window_count(), 1, "never fewer than one window");
+        assert_eq!(ed.active_editor().text(), "");
+        assert!(ed.path().is_none());
+        assert!(!ed.is_modified());
+    }
+
+    #[test]
+    fn an_open_menu_swallows_window_keys() {
+        let mut ed = app();
+        ed.new_window(&THEME()); // index 1, active
+        keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File
+        keydown(&mut ed, KeyCode::F(6), Modifiers::NONE); // should be swallowed by the menu
+        assert_eq!(ed.active_index(), 1, "F6 never reached window switching");
     }
 }
