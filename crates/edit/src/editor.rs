@@ -20,7 +20,7 @@ use rvision::canvas::Canvas;
 use rvision::cell::{Cell, Grapheme};
 use rvision::color::{Attributes, Style};
 use rvision::command::{CM_USER, Command};
-use rvision::event::{Event, EventResult, KeyCode, Modifiers};
+use rvision::event::{Event, EventResult, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, View};
@@ -28,6 +28,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// The default tab stop width in columns (ADR 0010 — display width 8).
 const DEFAULT_TAB_WIDTH: usize = 8;
+
+/// Lines the viewport pans per wheel notch (ADR 0007).
+const WHEEL_STEP: i16 = 3;
 
 /// Edit ▸ Cut — remove the selection to the clipboard. Posted by the editor,
 /// acted on by the app, which owns the clipboard (ADR 0019).
@@ -329,6 +332,21 @@ impl EditorView {
         cols[pos.column.min(cols.len() - 1)]
     }
 
+    /// The document [`Position`] under a **screen** point — the inverse of the draw
+    /// mapping: screen → viewport-local (via `bounds`) → document (via the scroll
+    /// offsets and tab/wide-grapheme expansion). A point above/left of the text
+    /// clamps to the first line/column; below the last line, to the last line; past
+    /// a line's end, to that line's end.
+    fn position_at(&self, screen: Point) -> Position {
+        let local_x = screen.x - self.bounds.origin().x;
+        let local_y = screen.y - self.bounds.origin().y;
+        let last_line = self.doc.line_count().saturating_sub(1);
+        let line = (self.top + local_y.max(0) as usize).min(last_line);
+        let target = self.left + local_x.max(0);
+        let text = self.doc.line(line).unwrap_or("");
+        Position::new(line, column_at_display(text, self.tab_width, target))
+    }
+
     /// The number of grapheme columns on `line`.
     fn line_len(&self, line: usize) -> usize {
         self.doc.line_graphemes(line)
@@ -367,6 +385,53 @@ impl EditorView {
     }
 
     // --- scrolling ---
+
+    /// Scrolls the viewport vertically by `delta` lines (negative = up) **without**
+    /// moving the caret — the wheel pans the view, like every editor. Clamped so the
+    /// first line never scrolls above the top.
+    fn scroll_lines(&mut self, delta: i16) {
+        let max_top = self.doc.line_count().saturating_sub(1) as i16;
+        self.top = (self.top as i16 + delta).clamp(0, max_top) as usize;
+    }
+
+    // --- mouse ---
+
+    /// Handles a mouse event whose position is in **screen** coordinates (the
+    /// editor stores its `bounds` in screen space). A left-press drops the caret
+    /// under the pointer and anchors a selection there; dragging extends it; the
+    /// wheel pans the viewport. Editing/motion still flow through the keyboard
+    /// paths, so this only moves the caret and view (ADR 0007).
+    fn handle_mouse(&mut self, mouse: &MouseEvent) -> EventResult {
+        match mouse.kind {
+            MouseKind::Down(MouseButton::Left) => {
+                self.history.break_run();
+                let pos = self.position_at(mouse.pos);
+                self.cursor = pos;
+                // Anchor the drag origin; an empty span (anchor == caret) selects
+                // nothing, so a plain click shows no selection.
+                self.anchor = Some(pos);
+                self.goal_col = None;
+                self.ensure_visible();
+                EventResult::Consumed
+            }
+            MouseKind::Drag(MouseButton::Left) => {
+                // The anchor stays put, so the selection grows to the pointer.
+                self.cursor = self.position_at(mouse.pos);
+                self.goal_col = None;
+                self.ensure_visible();
+                EventResult::Consumed
+            }
+            MouseKind::ScrollDown => {
+                self.scroll_lines(WHEEL_STEP);
+                EventResult::Consumed
+            }
+            MouseKind::ScrollUp => {
+                self.scroll_lines(-WHEEL_STEP);
+                EventResult::Consumed
+            }
+            _ => EventResult::Ignored,
+        }
+    }
 
     /// Scrolls the minimum needed to keep the caret inside the viewport.
     fn ensure_visible(&mut self) {
@@ -829,8 +894,10 @@ impl View for EditorView {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        let Event::Key(key) = event else {
-            return EventResult::Ignored;
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Mouse(mouse) => return self.handle_mouse(mouse),
+            _ => return EventResult::Ignored,
         };
         let shift = key.modifiers.contains(Modifiers::SHIFT);
         let ctrl = key.modifiers.contains(Modifiers::CONTROL);
@@ -1507,5 +1574,77 @@ mod tests {
             self.set_focused(true);
             self
         }
+    }
+
+    // --- mouse (Phase 9c) ---
+    //
+    // The test editor's bounds sit at the origin, so screen and viewport-local
+    // coordinates coincide here.
+
+    fn mouse(e: &mut EditorView, kind: MouseKind, x: i16, y: i16) -> EventResult {
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        e.handle_event(
+            &Event::Mouse(MouseEvent {
+                kind,
+                pos: Point::new(x, y),
+                modifiers: Modifiers::NONE,
+            }),
+            &mut ctx,
+        )
+    }
+
+    fn left_down(e: &mut EditorView, x: i16, y: i16) -> EventResult {
+        mouse(e, MouseKind::Down(MouseButton::Left), x, y)
+    }
+
+    #[test]
+    fn clicking_places_the_caret_under_the_pointer() {
+        let mut e = editor(20, 6).clone_doc("hello\nworld");
+        left_down(&mut e, 2, 0);
+        assert_eq!(e.cursor(), Position::new(0, 2));
+        left_down(&mut e, 3, 1);
+        assert_eq!(e.cursor(), Position::new(1, 3));
+    }
+
+    #[test]
+    fn clicking_past_a_line_end_clamps_to_the_end() {
+        let mut e = editor(20, 6).clone_doc("hello");
+        left_down(&mut e, 99, 0);
+        assert_eq!(e.cursor(), Position::new(0, 5)); // just past the last grapheme
+    }
+
+    #[test]
+    fn clicking_below_the_text_clamps_to_the_last_line() {
+        let mut e = editor(20, 6).clone_doc("a\nb");
+        left_down(&mut e, 0, 9);
+        assert_eq!(e.cursor().line, 1);
+    }
+
+    #[test]
+    fn a_plain_click_selects_nothing() {
+        let mut e = editor(20, 6).clone_doc("hello");
+        left_down(&mut e, 2, 0);
+        assert_eq!(e.selected_text(), None);
+    }
+
+    #[test]
+    fn dragging_extends_a_selection_from_the_press() {
+        let mut e = editor(20, 6).clone_doc("hello");
+        left_down(&mut e, 1, 0); // anchor at column 1
+        mouse(&mut e, MouseKind::Drag(MouseButton::Left), 4, 0); // caret to column 4
+        assert_eq!(e.selected_text().as_deref(), Some("ell"));
+        assert_eq!(e.cursor(), Position::new(0, 4));
+    }
+
+    #[test]
+    fn the_wheel_pans_the_view_without_moving_the_caret() {
+        let mut e = editor(20, 4).clone_doc("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9");
+        assert_eq!(e.scroll_metrics().top, 0);
+        mouse(&mut e, MouseKind::ScrollDown, 0, 0);
+        assert_eq!(e.scroll_metrics().top, WHEEL_STEP as usize);
+        assert_eq!(e.cursor(), Position::new(0, 0), "the caret stays put");
+        mouse(&mut e, MouseKind::ScrollUp, 0, 0);
+        assert_eq!(e.scroll_metrics().top, 0);
     }
 }

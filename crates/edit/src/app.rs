@@ -622,24 +622,47 @@ impl EditorApp {
 
     /// Routes a mouse event through the local passes. The menu bar gets first
     /// refusal whenever a pull-down is open (it is modal, ADR 0016) or the pointer
-    /// is on its row, so clicks open/choose/dismiss menus; otherwise a left-click on
-    /// a window focuses it. Clicks over bare desktop are ignored. Later sub-phases
-    /// add scrollbar/drag/editor behaviour.
+    /// is on its row. Otherwise: a left-press focuses the window under the pointer
+    /// and, if it landed in the interior, drops the caret there; a left-drag extends
+    /// the active editor's selection (even past its edge); the wheel pans the window
+    /// under the pointer. The frame itself (move/resize) is a later sub-phase.
     fn handle_mouse(&mut self, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
         if (self.menu_bar.is_open() || regions(self.size).menu.contains(mouse.pos))
             && self.menu_bar.handle_event(&Event::Mouse(*mouse), ctx) == EventResult::Consumed
         {
             return EventResult::Consumed;
         }
-        if let MouseKind::Down(MouseButton::Left) = mouse.kind {
-            if let Some(i) = self.window_at(mouse.pos) {
+        match mouse.kind {
+            MouseKind::Down(MouseButton::Left) => {
+                let Some(i) = self.window_at(mouse.pos) else {
+                    return EventResult::Ignored;
+                };
                 if i != self.active {
                     self.activate(i);
                 }
-                return EventResult::Consumed;
+                // A press in the interior places the caret; on the frame it is a
+                // (later) move/resize, so just the focus change above.
+                if inset1(self.window_rect_screen(self.active)).contains(mouse.pos) {
+                    self.doc_mut()
+                        .editor
+                        .handle_event(&Event::Mouse(*mouse), ctx);
+                }
+                EventResult::Consumed
             }
+            // A drag continues on the active editor wherever the pointer roams.
+            MouseKind::Drag(MouseButton::Left) => self
+                .doc_mut()
+                .editor
+                .handle_event(&Event::Mouse(*mouse), ctx),
+            // The wheel scrolls the window under the pointer without focusing it.
+            MouseKind::ScrollUp | MouseKind::ScrollDown => match self.window_at(mouse.pos) {
+                Some(i) => self.documents[i]
+                    .editor
+                    .handle_event(&Event::Mouse(*mouse), ctx),
+                None => EventResult::Ignored,
+            },
+            _ => EventResult::Ignored,
         }
-        EventResult::Ignored
     }
 
     /// Routes `event` through the three local passes (menu → editor → status) and
@@ -1692,5 +1715,39 @@ mod tests {
         assert!(ed.menu_is_open());
         left_click(&mut ed, 5, 5); // click down in the editor
         assert!(!ed.menu_is_open(), "the click-away closes the menu");
+    }
+
+    // --- mouse: editor interior + wheel (Phase 9c) ---
+
+    fn mouse_at(ed: &mut EditorApp, kind: MouseKind, x: i16, y: i16) -> Vec<Command> {
+        ed.dispatch(
+            &Event::Mouse(MouseEvent {
+                kind,
+                pos: Point::new(x, y),
+                modifiers: Modifiers::NONE,
+            }),
+            &CommandSet::new(),
+        )
+    }
+
+    #[test]
+    fn clicking_in_a_window_interior_places_the_caret() {
+        let mut ed = app(); // one zoomed window; interior starts at screen (1, 2)
+        ed.active_editor_mut().set_text("hello world");
+        left_click(&mut ed, 4, 2); // editor-local column 3 on the first line
+        assert_eq!(ed.active_editor().cursor().line, 0);
+        assert_eq!(ed.active_editor().cursor().column, 3);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_window_under_the_pointer() {
+        let mut ed = app();
+        ed.active_editor_mut().set_text(&"line\n".repeat(20));
+        assert_eq!(ed.active_editor().scroll_metrics().top, 0);
+        mouse_at(&mut ed, MouseKind::ScrollDown, 5, 5);
+        assert!(
+            ed.active_editor().scroll_metrics().top > 0,
+            "the wheel pans the view down"
+        );
     }
 }

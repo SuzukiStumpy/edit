@@ -313,8 +313,17 @@ interaction, window move/resize by drag, drag-select in the editor.
   dismisses it, and moving over an item tracks the highlight. A shared
   `pulldown_area` keeps the drawn box and the hit-test from drifting. `EditorApp`
   gives the bar first refusal whenever it is open or the pointer is on its row.
-- **9c** Editor mouse — click to place the caret, drag to select, wheel to
-  scroll, click the window scroll bars.
+- **9c** Editor mouse.
+  - **9c.1 ✅** Interior + wheel — `EditorView::handle_event` now answers
+    `Event::Mouse`: a left-press drops the caret under the pointer (`position_at`
+    inverts the draw mapping — screen → viewport-local → document, clamping past a
+    line's end / below the text) and anchors a selection; a left-drag extends it
+    (even past the edge); the wheel pans the view `WHEEL_STEP` lines without
+    moving the caret. `EditorApp` focuses the window on a press, routes an
+    interior press / any drag to the editor, and sends the wheel to the window
+    under the pointer.
+  - **9c.2** Scroll bars — clicking the window's scroll bars (drawn on the
+    border) scrolls; drag the thumb.
 - **9d** Window chrome drag — title-bar drag to move, border/corner to resize,
   click the close/zoom glyphs.
 - **9e** Dialog controls — `Button`, `InputLine`, `CheckBox`, `RadioButtons`,
