@@ -328,8 +328,15 @@ interaction, window move/resize by drag, drag-select in the editor.
     `hscroll_rect`) and applies it through `EditorView::scroll_lines`/
     `scroll_cols` — arrows step a line/column, the track pages by a viewport.
     Thumb *dragging* rides on the window drag work (9d).
-- **9d** Window chrome drag — title-bar drag to move, border/corner to resize,
-  click the close/zoom glyphs.
+- **9d ✅** Window chrome drag — a press on the active window's chrome is
+  classified by `EditorApp::chrome_hit`: the close glyph posts `CM_CLOSE`
+  (through the discard guard), the zoom glyph toggles maximise, the title bar
+  starts a move and the bottom-right corner a resize (tracked by an app-level
+  `Drag` state; a `Drag`/`Up` pair advances/ends it, clamped to the desktop and a
+  minimum size). The glyph column spans come from new `Frame::close_span`/
+  `zoom_span` so the hit-test matches what is drawn; grabbing a maximised window
+  un-zooms it first. *Still deferred:* dragging a scroll-bar thumb (needs a
+  `Drag::ScrollThumb` variant inverting `thumb_offset`).
 - **9e** Dialog controls — `Button`, `InputLine`, `CheckBox`, `RadioButtons`,
   `ListViewer`, `ScrollBar` clicks.
 

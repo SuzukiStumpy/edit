@@ -10,6 +10,7 @@ use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
 use crate::geometry::{Point, Rect};
+use std::ops::Range;
 
 /// The six glyphs of a box border: the four corners and the two edges.
 struct BorderGlyphs {
@@ -78,6 +79,26 @@ impl Frame {
         self.active = active;
     }
 
+    /// Whether a `width`-wide frame is wide enough to draw the close/zoom glyphs.
+    fn glyphs_shown(width: i16) -> bool {
+        width >= 10
+    }
+
+    /// The column span the close glyph occupies on a `width`-wide frame's top edge,
+    /// or `None` when the frame is too narrow to show it. Lets a window turn a click
+    /// into the close action without re-deriving the glyph layout (ADR 0007).
+    pub fn close_span(width: i16) -> Option<Range<i16>> {
+        Self::glyphs_shown(width).then(|| 2..2 + CLOSE.chars().count() as i16)
+    }
+
+    /// The column span the zoom glyph occupies, mirroring [`close_span`](Self::close_span).
+    pub fn zoom_span(width: i16) -> Option<Range<i16>> {
+        Self::glyphs_shown(width).then(|| {
+            let len = ZOOM.chars().count() as i16;
+            (width - 1 - len)..(width - 1)
+        })
+    }
+
     /// Draws the frame over the whole canvas it is handed. Degrades without panic
     /// for areas too small to hold a box (anything narrower or shorter than 2).
     pub fn draw(&self, canvas: &mut Canvas) {
@@ -95,14 +116,13 @@ impl Frame {
         // the whole top edge when they are absent) and truncated to fit, so it can
         // never overdraw a glyph.
         let top = 0;
-        let glyphs = w >= 10;
-        let (left, right) = if glyphs {
-            let zoom_len = ZOOM.chars().count() as i16;
-            canvas.put_str(Point::new(2, top), CLOSE, self.style);
-            canvas.put_str(Point::new(w - 1 - zoom_len, top), ZOOM, self.style);
-            (2 + CLOSE.chars().count() as i16, w - 1 - zoom_len)
-        } else {
-            (1, w - 1)
+        let (left, right) = match (Self::close_span(w), Self::zoom_span(w)) {
+            (Some(close), Some(zoom)) => {
+                canvas.put_str(Point::new(close.start, top), CLOSE, self.style);
+                canvas.put_str(Point::new(zoom.start, top), ZOOM, self.style);
+                (close.end, zoom.start)
+            }
+            _ => (1, w - 1),
         };
         self.draw_title(canvas, top, left, right);
     }

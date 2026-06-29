@@ -135,9 +135,35 @@ pub struct EditorApp {
     /// The internal clipboard for Cut/Copy/Paste (ADR 0019; OSC 52 is Phase 10).
     clipboard: String,
     finished: bool,
+    /// An in-progress drag of the active window's chrome (Phase 9d), or `None`.
+    drag: Option<Drag>,
     frame_style: Style,
     title_style: Style,
     backdrop: Cell,
+}
+
+/// An in-progress mouse drag of the active window's frame (Phase 9d). The offsets
+/// keep the grabbed point under the pointer for the duration of the drag.
+#[derive(Debug, Clone, Copy)]
+enum Drag {
+    /// Moving the window: the pointer's offset from the window's top-left corner.
+    Move { dx: i16, dy: i16 },
+    /// Resizing from the bottom-right corner: the pointer's offset from that cell.
+    Resize { dx: i16, dy: i16 },
+}
+
+/// Where on a window's chrome a press landed (Phase 9d).
+enum ChromeHit {
+    /// The close glyph — request a close (through the discard guard).
+    Close,
+    /// The zoom glyph — toggle maximise.
+    Zoom,
+    /// The bottom-right corner — start a resize drag.
+    Resize,
+    /// The title bar — start a move drag.
+    Move,
+    /// Not on actionable chrome (interior, scroll bar, or plain border).
+    None,
 }
 
 /// The three chrome regions for a terminal of `size`.
@@ -290,6 +316,7 @@ impl EditorApp {
             size,
             clipboard: String::new(),
             finished: false,
+            drag: None,
             frame_style: theme.style(Role::WindowFrame),
             title_style: theme.style(Role::WindowTitle),
             backdrop: Cell::from_char('░', theme.style(Role::DesktopBackground)),
@@ -405,6 +432,95 @@ impl EditorApp {
                 }
             }
         }
+    }
+
+    // --- window chrome drag (Phase 9d) ---
+
+    /// Classifies a press at screen `pos` on window `i`'s chrome: the close/zoom
+    /// glyphs (column spans shared with the [`Frame`] drawing), the bottom-right
+    /// corner (resize), or the rest of the title row (move).
+    fn chrome_hit(&self, i: usize, pos: Point) -> ChromeHit {
+        let r = self.window_rect_screen(i);
+        let (w, h) = (r.width(), r.height());
+        let lx = pos.x - r.origin().x;
+        let ly = pos.y - r.origin().y;
+        if ly == 0 {
+            if Frame::close_span(w).is_some_and(|s| s.contains(&lx)) {
+                return ChromeHit::Close;
+            }
+            if Frame::zoom_span(w).is_some_and(|s| s.contains(&lx)) {
+                return ChromeHit::Zoom;
+            }
+        }
+        if lx == w - 1 && ly == h - 1 {
+            return ChromeHit::Resize;
+        }
+        if ly == 0 && lx >= 1 && lx < w - 1 {
+            return ChromeHit::Move;
+        }
+        ChromeHit::None
+    }
+
+    /// Restores a maximised active window to the full desktop as its `normal` rect
+    /// before a drag, so move/resize work from a concrete rectangle (and the window
+    /// does not jump). A no-op when not zoomed.
+    fn unzoom_for_drag(&mut self) {
+        if self.zoomed {
+            let ds = self.desktop().size();
+            self.documents[self.active].normal = Rect::from_origin_size(Point::new(0, 0), ds);
+            self.zoomed = false;
+            self.sync_layout();
+        }
+    }
+
+    /// Begins a title-bar move drag, remembering where on the window the pointer
+    /// grabbed so it tracks without jumping.
+    fn start_move(&mut self, pos: Point) {
+        self.unzoom_for_drag();
+        let o = self.window_rect_screen(self.active).origin();
+        self.drag = Some(Drag::Move {
+            dx: pos.x - o.x,
+            dy: pos.y - o.y,
+        });
+    }
+
+    /// Begins a corner resize drag, remembering the pointer's offset from the
+    /// bottom-right cell.
+    fn start_resize(&mut self, pos: Point) {
+        self.unzoom_for_drag();
+        let corner = self
+            .window_rect_screen(self.active)
+            .bottom_right()
+            .offset(-1, -1);
+        self.drag = Some(Drag::Resize {
+            dx: pos.x - corner.x,
+            dy: pos.y - corner.y,
+        });
+    }
+
+    /// Advances the in-progress drag to screen `pos`: moves the window's origin or
+    /// resizes from its corner, clamped to the desktop (and a minimum size), then
+    /// re-syncs editor bounds. A no-op when no drag is active.
+    fn drag_to(&mut self, pos: Point) {
+        let Some(drag) = self.drag else {
+            return;
+        };
+        let ds = self.desktop().size();
+        let desk = self.desktop().origin();
+        let cur = self.documents[self.active].normal;
+        let next = match drag {
+            Drag::Move { dx, dy } => {
+                let origin = Point::new(pos.x - dx - desk.x, pos.y - dy - desk.y);
+                Rect::from_origin_size(origin, cur.size())
+            }
+            Drag::Resize { dx, dy } => {
+                let w = (pos.x - dx - desk.x - cur.origin().x + 1).max(MIN_WINDOW.width);
+                let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
+                Rect::from_origin_size(cur.origin(), Size::new(w, h))
+            }
+        };
+        self.documents[self.active].normal = clamp_rect(next, ds);
+        self.sync_layout();
     }
 
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
@@ -697,10 +813,12 @@ impl EditorApp {
 
     /// Routes a mouse event through the local passes. The menu bar gets first
     /// refusal whenever a pull-down is open (it is modal, ADR 0016) or the pointer
-    /// is on its row. Otherwise: a left-press focuses the window under the pointer
-    /// and, if it landed in the interior, drops the caret there; a left-drag extends
-    /// the active editor's selection (even past its edge); the wheel pans the window
-    /// under the pointer. The frame itself (move/resize) is a later sub-phase.
+    /// is on its row. Otherwise a left-press focuses the window under the pointer and
+    /// dispatches by where it landed — close/zoom glyph, a scroll bar, the title bar
+    /// (start a move), the resize corner (start a resize), or the interior (drop the
+    /// caret). A left-drag continues an active window move/resize, else extends the
+    /// editor's selection; releasing ends a drag; the wheel pans the window under the
+    /// pointer.
     fn handle_mouse(&mut self, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
         if (self.menu_bar.is_open() || regions(self.size).menu.contains(mouse.pos))
             && self.menu_bar.handle_event(&Event::Mouse(*mouse), ctx) == EventResult::Consumed
@@ -715,22 +833,43 @@ impl EditorApp {
                 if i != self.active {
                     self.activate(i);
                 }
-                // A press on a scroll bar scrolls; in the interior places the caret;
-                // on the rest of the frame it is a (later) move/resize.
-                if let Some((orientation, part)) = self.scrollbar_hit(self.active, mouse.pos) {
-                    self.apply_scroll(self.active, orientation, part);
-                } else if inset1(self.window_rect_screen(self.active)).contains(mouse.pos) {
-                    self.doc_mut()
-                        .editor
-                        .handle_event(&Event::Mouse(*mouse), ctx);
+                match self.chrome_hit(self.active, mouse.pos) {
+                    ChromeHit::Close => ctx.post(CM_CLOSE), // through the discard guard
+                    ChromeHit::Zoom => self.toggle_zoom(),
+                    ChromeHit::Move => self.start_move(mouse.pos),
+                    ChromeHit::Resize => self.start_resize(mouse.pos),
+                    // A scroll bar scrolls; otherwise an interior press places the caret.
+                    ChromeHit::None => {
+                        if let Some((o, part)) = self.scrollbar_hit(self.active, mouse.pos) {
+                            self.apply_scroll(self.active, o, part);
+                        } else if inset1(self.window_rect_screen(self.active)).contains(mouse.pos) {
+                            self.doc_mut()
+                                .editor
+                                .handle_event(&Event::Mouse(*mouse), ctx);
+                        }
+                    }
                 }
                 EventResult::Consumed
             }
-            // A drag continues on the active editor wherever the pointer roams.
-            MouseKind::Drag(MouseButton::Left) => self
-                .doc_mut()
-                .editor
-                .handle_event(&Event::Mouse(*mouse), ctx),
+            // A drag moves/resizes the window if one is under way, else drag-selects.
+            MouseKind::Drag(MouseButton::Left) => {
+                if self.drag.is_some() {
+                    self.drag_to(mouse.pos);
+                    EventResult::Consumed
+                } else {
+                    self.doc_mut()
+                        .editor
+                        .handle_event(&Event::Mouse(*mouse), ctx)
+                }
+            }
+            // Releasing ends a window drag (the editor needs no release).
+            MouseKind::Up(MouseButton::Left) => {
+                if self.drag.take().is_some() {
+                    EventResult::Consumed
+                } else {
+                    EventResult::Ignored
+                }
+            }
             // The wheel scrolls the window under the pointer without focusing it.
             MouseKind::ScrollUp | MouseKind::ScrollDown => match self.window_at(mouse.pos) {
                 Some(i) => self.documents[i]
@@ -1853,6 +1992,68 @@ mod tests {
         assert!(
             ed.active_editor().scroll_metrics().top > 0,
             "the wheel pans the view down"
+        );
+    }
+
+    // --- mouse: window chrome drag (Phase 9d) ---
+
+    fn drag_to(ed: &mut EditorApp, x: i16, y: i16) {
+        mouse_at(ed, MouseKind::Drag(MouseButton::Left), x, y);
+    }
+
+    fn release(ed: &mut EditorApp, x: i16, y: i16) {
+        mouse_at(ed, MouseKind::Up(MouseButton::Left), x, y);
+    }
+
+    #[test]
+    fn clicking_the_close_glyph_posts_close() {
+        let mut ed = app(); // one zoomed window over a 40-wide desktop
+        let posted = left_click(&mut ed, 3, 1); // the [■] glyph on the top edge
+        assert_eq!(posted, vec![CM_CLOSE]); // routed through the driver's guard
+    }
+
+    #[test]
+    fn clicking_the_zoom_glyph_toggles_zoom() {
+        let mut ed = app();
+        assert!(ed.zoomed);
+        left_click(&mut ed, 37, 1); // the [↑] glyph near the top-right
+        assert!(!ed.zoomed);
+    }
+
+    #[test]
+    fn grabbing_the_title_of_a_maximised_window_unzooms_it() {
+        let mut ed = app();
+        assert!(ed.zoomed);
+        left_click(&mut ed, 10, 1); // the title bar
+        assert!(!ed.zoomed, "starting a drag un-maximises");
+    }
+
+    #[test]
+    fn dragging_the_title_bar_moves_the_window() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        ed.new_window(&THEME());
+        ed.tile(); // window 1 active at desktop-local (20, 0), screen origin (20, 1)
+        assert_eq!(ed.documents[1].normal.origin().x, 20);
+        left_click(&mut ed, 25, 1); // grab the title bar (offset 5 from the left)
+        drag_to(&mut ed, 5, 3); // drag left
+        release(&mut ed, 5, 3);
+        assert_eq!(ed.documents[1].normal.origin().x, 0);
+        assert!(ed.drag.is_none(), "the release ends the drag");
+    }
+
+    #[test]
+    fn dragging_the_corner_resizes_the_window() {
+        let mut ed = EditorApp::new(Size::new(40, 12), &THEME());
+        ed.new_window(&THEME());
+        ed.tile(); // window 1: screen (20, 1) size (20, 10), corner cell (39, 10)
+        left_click(&mut ed, 39, 10); // grab the resize corner
+        drag_to(&mut ed, 30, 6);
+        release(&mut ed, 30, 6);
+        let r = ed.documents[1].normal;
+        assert!(
+            r.width() < 20 && r.height() < 10,
+            "the window shrank to {:?}",
+            r.size()
         );
     }
 }
