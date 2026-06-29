@@ -43,6 +43,7 @@ impl EditorView {
     pub fn find(&mut self, query: Query, backward: bool) -> bool; // search + select
     pub fn find_next(&mut self, backward: bool) -> bool;   // repeat the last search
     pub fn has_query(&self) -> bool;
+    pub fn replace_all(&mut self, query: &Query, with: &str) -> usize; // one undo unit
     pub fn set_bounds(&mut self, bounds: Rect);            // relayout
 }
 
@@ -75,7 +76,10 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   (forward) or selection start (backward), selecting and revealing the match and
   remembering it; `find_next` repeats. `go_to_line` clamps a 1-based line into the
   document. Ctrl+F/Ctrl+G post `CM_FIND`/`CM_GOTO` for the app to run a dialog; F3
-  (Find Next) is editor-local like undo.
+  (Find Next) is editor-local like undo. `replace_all` rewrites every match (scan
+  left-to-right, no wrap, continue past each replacement) as a single undo unit,
+  recording the already-applied edits straight into the journal rather than via
+  `commit`; the Replace menu posts `CM_REPLACE` for the app to run the dialog.
 - **Undo/redo are editor-local** (`crate::history`): `undo`/`redo` pop a record and
   replay its inverses/edits, restoring the caret to the record's `before`/`after`.
   A run of plain typing — and a run of in-line Backspace/Delete — coalesces into a

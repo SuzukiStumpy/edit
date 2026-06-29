@@ -10,6 +10,8 @@
 
 mod find;
 mod go_to_line;
+mod replace;
 
 pub use find::FindDialog;
 pub use go_to_line::GoToLine;
+pub use replace::ReplaceDialog;

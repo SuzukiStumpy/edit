@@ -47,6 +47,9 @@ pub const CM_FIND: Command = Command(CM_USER + 15);
 /// Search ▸ Find Next — repeat the last search (the editor handles the key; the
 /// menu posts it for the driver to route to [`find_next`](EditorView::find_next)).
 pub const CM_FIND_NEXT: Command = Command(CM_USER + 16);
+/// Search ▸ Replace — the editor posts this; the app runs the Replace dialog and
+/// calls [`replace_all`](EditorView::replace_all).
+pub const CM_REPLACE: Command = Command(CM_USER + 17);
 /// Search ▸ Go to Line — the editor posts this; the app runs the dialog and calls
 /// [`go_to_line`](EditorView::go_to_line).
 pub const CM_GOTO: Command = Command(CM_USER + 18);
@@ -161,6 +164,40 @@ impl EditorView {
     /// Whether a search has been run (so Find Next has something to repeat).
     pub fn has_query(&self) -> bool {
         self.last_query.is_some()
+    }
+
+    /// Replaces every match of `query` with `with` as a single undo unit; returns
+    /// the number of replacements. Scans left-to-right without wrapping, continuing
+    /// past each replacement so it never re-matches inside the inserted text.
+    pub fn replace_all(&mut self, query: &Query, with: &str) -> usize {
+        let before = self.cursor;
+        let mut edits = Vec::new();
+        let mut from = Position::default();
+        let mut end = before;
+        while let Some(found) = query.find(&self.doc, from, false, false) {
+            let span = self.doc.slice(found.start, found.end);
+            let delete = Edit::delete(found.start, span);
+            let insert = Edit::insert(found.start, with);
+            self.doc.apply(&delete);
+            self.doc.apply(&insert);
+            edits.push(delete);
+            edits.push(insert);
+            from = position_after(found.start, with);
+            end = from;
+        }
+        if edits.is_empty() {
+            return 0;
+        }
+        let count = edits.len() / 2;
+        // The edits are already applied (we searched the live buffer), so record
+        // them in the journal directly rather than through `commit`.
+        self.cursor = end;
+        self.anchor = None;
+        self.goal_col = None;
+        self.history
+            .record(before, edits, end, Coalesce::Standalone);
+        self.ensure_visible();
+        count
     }
 
     /// Searches for `query` from just past the current match (forward) or before it
@@ -1208,6 +1245,48 @@ mod tests {
         e.find(Query::new("ab"), false); // selects 0..2
         key(&mut e, KeyCode::F(3));
         assert_eq!(e.cursor(), Position::new(0, 5), "F3 found the next 'ab'");
+    }
+
+    // --- replace (7c.3) ---
+
+    #[test]
+    fn replace_all_changes_every_match_as_one_undo_unit() {
+        use crate::search::Query;
+        let mut e = editor(40, 4).clone_doc("foo bar foo baz foo");
+        assert_eq!(e.replace_all(&Query::new("foo"), "X"), 3);
+        assert_eq!(e.text(), "X bar X baz X");
+        assert!(e.is_modified());
+        e.undo();
+        assert_eq!(
+            e.text(),
+            "foo bar foo baz foo",
+            "a single undo restores all"
+        );
+    }
+
+    #[test]
+    fn replace_all_copes_with_growth_and_deletion() {
+        use crate::search::Query;
+        let mut grow = editor(40, 4).clone_doc("aaa");
+        assert_eq!(grow.replace_all(&Query::new("a"), "bb"), 3);
+        assert_eq!(grow.text(), "bbbbbb", "no re-match inside the replacement");
+        let mut shrink = editor(40, 4).clone_doc("a-a-a");
+        assert_eq!(shrink.replace_all(&Query::new("a"), ""), 3);
+        assert_eq!(shrink.text(), "--");
+    }
+
+    #[test]
+    fn replace_all_spans_lines_and_reports_zero_when_absent() {
+        use crate::search::Query;
+        let mut e = editor(40, 5).clone_doc("cat\ndog\ncat");
+        assert_eq!(e.replace_all(&Query::new("cat"), "x"), 2);
+        assert_eq!(e.text(), "x\ndog\nx");
+        assert_eq!(e.replace_all(&Query::new("zzz"), "q"), 0);
+        assert_eq!(
+            e.text(),
+            "x\ndog\nx",
+            "no match leaves the document untouched"
+        );
     }
 
     // --- undo / redo (the journal; ADR 0011, 7b) ---

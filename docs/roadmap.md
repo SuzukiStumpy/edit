@@ -246,7 +246,7 @@ single-document editor with menus, a status line, and modal Open/Save dialogs.
 
 ---
 
-## Phase 7 — Editing features
+## Phase 7 — Editing features ✅
 
 - **7a ✅ Selection + clipboard** — selection rendered in Phase 6; Cut/Copy/Paste
   now wired through an app-owned internal clipboard the editor reaches by posting
@@ -263,7 +263,9 @@ single-document editor with menus, a status line, and modal Open/Save dialogs.
     engine: case/whole-word/direction/wrap) + the Find dialog; `find`/`find_next`
     select and reveal matches. Ctrl+F opens Find, F3 repeats (so F3 is no longer
     Open — that stays on the File menu, matching MS-DOS `EDIT`).
-  - 7c.3 Replace + Change All.
+  - **7c.3 ✅ Replace** — the Replace dialog + `EditorView::replace_all` (every
+    match rewritten as one undo unit), reporting a count. Interactive
+    one-at-a-time replace is a possible later refinement.
 
 ---
 

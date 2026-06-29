@@ -1,6 +1,6 @@
 # Module spec: `edit::dialogs`
 
-- **Status:** In progress
+- **Status:** Done
 - **Phase:** 7 (editing features) — sub-phase 7c
 - **Related ADRs:** 0017 (modal dialogs via `exec_view` + focus-aware controls),
   0018 (editor app drives the modals)
@@ -32,8 +32,14 @@ impl FindDialog {
     pub fn backward(&self) -> bool;     // the "Search backwards" option
 }
 
-// 7c.3:
-// pub struct ReplaceDialog { /* + replacement input, Change-All */ }
+pub struct ReplaceDialog { /* find + replacement inputs, case/whole-word, Replace All */ }
+impl ReplaceDialog {
+    pub fn new(theme: &Theme) -> Self;
+    pub fn query(&self) -> Query;       // find field + options
+    pub fn replacement(&self) -> String;
+}
+// CM_OK runs Replace All (`EditorView::replace_all`); interactive one-at-a-time
+// replace is a possible later refinement.
 ```
 
 ## Behaviour & invariants

@@ -27,9 +27,10 @@ use rvision::widgets::{
     FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, ScrollBar, StatusItem, StatusLine,
 };
 
-use crate::dialogs::{FindDialog, GoToLine};
+use crate::dialogs::{FindDialog, GoToLine, ReplaceDialog};
 use crate::editor::{
-    CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_UNDO, EditorView,
+    CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_REPLACE, CM_UNDO,
+    EditorView,
 };
 use crate::file::{self, Encoding};
 
@@ -119,6 +120,7 @@ impl EditorApp {
                     vec![
                         MenuItem::new("Find...", CM_FIND).with_shortcut("Ctrl-F"),
                         MenuItem::new("Find Next", CM_FIND_NEXT).with_shortcut("F3"),
+                        MenuItem::new("Replace...", CM_REPLACE),
                         MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G"),
                     ],
                 ),
@@ -487,10 +489,34 @@ fn handle_command<T: Backend + EventSource>(
         CM_FIND_NEXT => {
             ed.editor.find_next(false);
         }
+        CM_REPLACE => replace(app, ed, theme)?,
         CM_GOTO => go_to_line(app, ed, theme)?,
         _ => {}
     }
     Ok(())
+}
+
+/// Runs the Replace dialog and replaces all matches, reporting the count.
+fn replace<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<()> {
+    let mut dialog = ReplaceDialog::new(theme);
+    if app.exec_view(&mut *ed, &mut dialog)? != CM_OK {
+        return Ok(());
+    }
+    let query = dialog.query();
+    if query.needle.is_empty() {
+        return Ok(());
+    }
+    let count = ed.editor.replace_all(&query, &dialog.replacement());
+    let report = match count {
+        0 => "Text not found.".to_string(),
+        1 => "Replaced 1 occurrence.".to_string(),
+        n => format!("Replaced {n} occurrences."),
+    };
+    message(app, ed, theme, "Replace", &report)
 }
 
 /// Runs the Find dialog and selects the first match (Find Next then repeats it).
@@ -777,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn the_search_menu_lists_find_find_next_and_go_to_line() {
+    fn the_search_menu_lists_find_find_next_replace_and_go_to_line() {
         let mut ed = app();
         keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT); // open Search
         let find = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: Find...
@@ -786,6 +812,11 @@ mod tests {
         keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Find Next
         let next = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
         assert_eq!(next, vec![CM_FIND_NEXT]);
+        keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT);
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Find Next
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Replace...
+        let replace = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
+        assert_eq!(replace, vec![CM_REPLACE]);
     }
 
     #[test]
@@ -794,10 +825,11 @@ mod tests {
         // The key posts it straight from the editor.
         let posted = keydown(&mut ed, KeyCode::Char('g'), Modifiers::CONTROL);
         assert_eq!(posted, vec![CM_GOTO]);
-        // And the Search menu's "Go to Line..." item (third) posts the same command.
+        // And the Search menu's "Go to Line..." item (fourth) posts the same command.
         keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT); // open Search
         assert!(ed.menu_is_open());
         keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Find Next
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Replace...
         keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Go to Line...
         let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
         assert_eq!(posted, vec![CM_GOTO]);
