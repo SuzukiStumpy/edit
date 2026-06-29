@@ -38,6 +38,11 @@ impl EditorView {
     pub fn redo(&mut self) -> bool;                        // re-apply it
     pub fn can_undo(&self) -> bool;
     pub fn can_redo(&self) -> bool;
+    pub fn line_count(&self) -> usize;
+    pub fn go_to_line(&mut self, line: usize);             // 1-based, clamped
+    pub fn find(&mut self, query: Query, backward: bool) -> bool; // search + select
+    pub fn find_next(&mut self, backward: bool) -> bool;   // repeat the last search
+    pub fn has_query(&self) -> bool;
     pub fn set_bounds(&mut self, bounds: Rect);            // relayout
 }
 
@@ -66,6 +71,11 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   cursor to the edit's far end, clears the selection, marks the goal column stale,
   and journals the action in the [`History`]. The dirty flag is derived from the
   journal's saved marker (so undo-to-save reads clean), not a standalone `bool`.
+- **Search/Go-to-line** (`crate::search`): `find` runs a [`Query`] from the caret
+  (forward) or selection start (backward), selecting and revealing the match and
+  remembering it; `find_next` repeats. `go_to_line` clamps a 1-based line into the
+  document. Ctrl+F/Ctrl+G post `CM_FIND`/`CM_GOTO` for the app to run a dialog; F3
+  (Find Next) is editor-local like undo.
 - **Undo/redo are editor-local** (`crate::history`): `undo`/`redo` pop a record and
   replay its inverses/edits, restoring the caret to the record's `before`/`after`.
   A run of plain typing — and a run of in-line Backspace/Delete — coalesces into a

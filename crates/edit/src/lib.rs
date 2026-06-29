@@ -17,4 +17,5 @@ pub mod dialogs;
 pub mod editor;
 pub mod file;
 mod history;
+pub mod search;
 pub mod text;

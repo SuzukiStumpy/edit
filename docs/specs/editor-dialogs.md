@@ -25,8 +25,14 @@ impl GoToLine {
 impl View for GoToLine { /* draw, handle_event, focusable */ }
 impl Modal for GoToLine { /* size, ends_on = CM_OK | CM_CANCEL */ }
 
-// 7c.2 / 7c.3:
-// pub struct FindDialog { /* query input, case/whole-word/backwards checkboxes, buttons */ }
+pub struct FindDialog { /* query input, case/whole-word/backwards checkboxes, buttons */ }
+impl FindDialog {
+    pub fn new(theme: &Theme) -> Self;
+    pub fn query(&self) -> Query;       // needle + case/whole-word, after CM_OK
+    pub fn backward(&self) -> bool;     // the "Search backwards" option
+}
+
+// 7c.3:
 // pub struct ReplaceDialog { /* + replacement input, Change-All */ }
 ```
 

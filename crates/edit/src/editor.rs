@@ -14,6 +14,7 @@
 //! cursor motion can never disagree.
 
 use crate::history::{Coalesce, History};
+use crate::search::{Match, Query};
 use crate::text::{Edit, LineArray, Position, TextBuffer, position_after};
 use rvision::canvas::Canvas;
 use rvision::cell::{Cell, Grapheme};
@@ -40,6 +41,12 @@ pub const CM_PASTE: Command = Command(CM_USER + 12);
 pub const CM_UNDO: Command = Command(CM_USER + 13);
 /// Edit ▸ Redo — re-apply the last undone action.
 pub const CM_REDO: Command = Command(CM_USER + 14);
+/// Search ▸ Find — the editor posts this; the app runs the Find dialog and calls
+/// [`find`](EditorView::find).
+pub const CM_FIND: Command = Command(CM_USER + 15);
+/// Search ▸ Find Next — repeat the last search (the editor handles the key; the
+/// menu posts it for the driver to route to [`find_next`](EditorView::find_next)).
+pub const CM_FIND_NEXT: Command = Command(CM_USER + 16);
 /// Search ▸ Go to Line — the editor posts this; the app runs the dialog and calls
 /// [`go_to_line`](EditorView::go_to_line).
 pub const CM_GOTO: Command = Command(CM_USER + 18);
@@ -62,6 +69,8 @@ pub struct EditorView {
     focused: bool,
     /// The undo/redo journal; also the source of truth for the dirty flag.
     history: History,
+    /// The last search, for Find Next / Find Previous to repeat.
+    last_query: Option<Query>,
     text_style: Style,
     selection_style: Style,
 }
@@ -81,6 +90,7 @@ impl EditorView {
             tab_width: DEFAULT_TAB_WIDTH,
             focused: false,
             history: History::new(),
+            last_query: None,
             text_style: theme.style(Role::EditorText),
             selection_style: theme.style(Role::Selection),
         }
@@ -127,6 +137,55 @@ impl EditorView {
         let target = line.clamp(1, last) - 1;
         self.cursor = Position::new(target, 0);
         self.anchor = None;
+        self.goal_col = None;
+        self.ensure_visible();
+    }
+
+    /// Runs `query` (remembering it for Find Next), selecting the first match in
+    /// the given direction and revealing it. Returns whether a match was found.
+    pub fn find(&mut self, query: Query, backward: bool) -> bool {
+        self.last_query = Some(query);
+        let query = self.last_query.clone().expect("just set");
+        self.run_search(&query, backward)
+    }
+
+    /// Repeats the last search (Find Next / Find Previous), or returns `false` if
+    /// there has been no search yet.
+    pub fn find_next(&mut self, backward: bool) -> bool {
+        let Some(query) = self.last_query.clone() else {
+            return false;
+        };
+        self.run_search(&query, backward)
+    }
+
+    /// Whether a search has been run (so Find Next has something to repeat).
+    pub fn has_query(&self) -> bool {
+        self.last_query.is_some()
+    }
+
+    /// Searches for `query` from just past the current match (forward) or before it
+    /// (backward), wrapping, and selects the hit.
+    fn run_search(&mut self, query: &Query, backward: bool) -> bool {
+        let from = if backward {
+            self.selection_range()
+                .map_or(self.cursor, |(start, _)| start)
+        } else {
+            self.cursor
+        };
+        match query.find(&self.doc, from, backward, true) {
+            Some(found) => {
+                self.select_match(found);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Selects `found` (anchor at its start, caret at its end) and reveals it.
+    fn select_match(&mut self, found: Match) {
+        self.history.break_run();
+        self.anchor = Some(found.start);
+        self.cursor = found.end;
         self.goal_col = None;
         self.ensure_visible();
     }
@@ -746,6 +805,7 @@ impl View for EditorView {
             KeyCode::Char('c' | 'C') if ctrl && !alt => return self.post(ctx, CM_COPY),
             KeyCode::Char('x' | 'X') if ctrl && !alt => return self.post(ctx, CM_CUT),
             KeyCode::Char('v' | 'V') if ctrl && !alt => return self.post(ctx, CM_PASTE),
+            KeyCode::Char('f' | 'F') if ctrl && !alt => return self.post(ctx, CM_FIND),
             KeyCode::Char('g' | 'G') if ctrl && !alt => return self.post(ctx, CM_GOTO),
             KeyCode::Insert if ctrl => return self.post(ctx, CM_COPY),
             KeyCode::Insert if shift => return self.post(ctx, CM_PASTE),
@@ -765,6 +825,11 @@ impl View for EditorView {
             }
             KeyCode::Char('y' | 'Y') if ctrl && !alt => {
                 self.redo();
+                EventResult::Consumed
+            }
+            // Find Next/Previous repeat the last search — editor-local, like undo.
+            KeyCode::F(3) if !ctrl && !alt => {
+                self.find_next(shift);
                 EventResult::Consumed
             }
             KeyCode::Char(c) if !c.is_control() && !ctrl && !alt => {
@@ -1102,6 +1167,47 @@ mod tests {
         );
         assert_eq!(r, EventResult::Consumed);
         assert_eq!(ctx.take_posted(), vec![Event::Command(CM_GOTO)]);
+    }
+
+    // --- find (7c.2) ---
+
+    #[test]
+    fn find_selects_the_match_and_find_next_walks_both_ways() {
+        use crate::search::Query;
+        let mut e = editor(40, 4).clone_doc("foo bar foo baz foo");
+        assert!(e.find(Query::new("foo"), false));
+        assert_eq!(e.selected_text().as_deref(), Some("foo"));
+        assert_eq!(e.cursor(), Position::new(0, 3), "first match 0..3");
+        assert!(e.find_next(false));
+        assert_eq!(e.cursor(), Position::new(0, 11), "second match 8..11");
+        assert!(e.find_next(true));
+        assert_eq!(e.cursor(), Position::new(0, 3), "back to the first match");
+    }
+
+    #[test]
+    fn find_reports_absence_and_find_next_needs_a_prior_query() {
+        use crate::search::Query;
+        let mut e = editor(20, 4).clone_doc("hello");
+        assert!(!e.find_next(false), "nothing to repeat yet");
+        assert!(!e.find(Query::new("zzz"), false), "no such text");
+        assert!(e.has_query(), "but the query is remembered");
+    }
+
+    #[test]
+    fn ctrl_f_posts_find_and_f3_repeats_locally() {
+        use crate::search::Query;
+        let mut e = editor(20, 4).clone_doc("ab ab");
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        e.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Char('f'), Modifiers::CONTROL)),
+            &mut ctx,
+        );
+        assert_eq!(ctx.take_posted(), vec![Event::Command(CM_FIND)]);
+        // With a stored query, F3 advances without the app's help.
+        e.find(Query::new("ab"), false); // selects 0..2
+        key(&mut e, KeyCode::F(3));
+        assert_eq!(e.cursor(), Position::new(0, 5), "F3 found the next 'ab'");
     }
 
     // --- undo / redo (the journal; ADR 0011, 7b) ---

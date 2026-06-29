@@ -27,8 +27,10 @@ use rvision::widgets::{
     FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, ScrollBar, StatusItem, StatusLine,
 };
 
-use crate::dialogs::GoToLine;
-use crate::editor::{CM_COPY, CM_CUT, CM_GOTO, CM_PASTE, CM_REDO, CM_UNDO, EditorView};
+use crate::dialogs::{FindDialog, GoToLine};
+use crate::editor::{
+    CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_UNDO, EditorView,
+};
 use crate::file::{self, Encoding};
 
 /// File ▸ New.
@@ -96,7 +98,7 @@ impl EditorApp {
                     "File",
                     vec![
                         MenuItem::new("New", CM_NEW),
-                        MenuItem::new("Open...", CM_OPEN).with_shortcut("F3"),
+                        MenuItem::new("Open...", CM_OPEN),
                         MenuItem::new("Save", CM_SAVE).with_shortcut("F2"),
                         MenuItem::new("Save As...", CM_SAVE_AS),
                         MenuItem::new("Exit", CM_QUIT).with_shortcut("Alt-X"),
@@ -114,7 +116,11 @@ impl EditorApp {
                 ),
                 Menu::new(
                     "Search",
-                    vec![MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G")],
+                    vec![
+                        MenuItem::new("Find...", CM_FIND).with_shortcut("Ctrl-F"),
+                        MenuItem::new("Find Next", CM_FIND_NEXT).with_shortcut("F3"),
+                        MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G"),
+                    ],
                 ),
             ],
             theme,
@@ -128,12 +134,8 @@ impl EditorApp {
                     KeyEvent::new(KeyCode::F(2), Modifiers::NONE),
                     CM_SAVE,
                 ),
-                StatusItem::new(
-                    "F3",
-                    "Open",
-                    KeyEvent::new(KeyCode::F(3), Modifiers::NONE),
-                    CM_OPEN,
-                ),
+                // F3 is the editor's Find Next (consumed before the status line),
+                // so Open lives on the File menu; no F3 accelerator here.
                 StatusItem::new(
                     "Alt-X",
                     "Exit",
@@ -481,8 +483,28 @@ fn handle_command<T: Backend + EventSource>(
         CM_SAVE_AS => {
             save_as(app, ed, theme)?;
         }
+        CM_FIND => find(app, ed, theme)?,
+        CM_FIND_NEXT => {
+            ed.editor.find_next(false);
+        }
         CM_GOTO => go_to_line(app, ed, theme)?,
         _ => {}
+    }
+    Ok(())
+}
+
+/// Runs the Find dialog and selects the first match (Find Next then repeats it).
+fn find<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<()> {
+    let mut dialog = FindDialog::new(theme);
+    if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
+        let query = dialog.query();
+        if !query.needle.is_empty() {
+            ed.editor.find(query, dialog.backward());
+        }
     }
     Ok(())
 }
@@ -738,14 +760,45 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_f_posts_find_and_f3_repeats_in_the_editor() {
+        let mut ed = app();
+        type_chars(&mut ed, "ab ab");
+        // Ctrl+F bubbles up CM_FIND for the driver to run the dialog.
+        let posted = keydown(&mut ed, KeyCode::Char('f'), Modifiers::CONTROL);
+        assert_eq!(posted, vec![CM_FIND]);
+        // Seed a query directly, then F3 (Find Next) is handled inside the editor.
+        ed.editor.find(crate::search::Query::new("ab"), false); // selects 0..2
+        let posted = keydown(&mut ed, KeyCode::F(3), Modifiers::NONE);
+        assert!(
+            posted.is_empty(),
+            "F3 is consumed by the editor, posts nothing"
+        );
+        assert_eq!(ed.editor.cursor(), crate::text::Position::new(0, 5));
+    }
+
+    #[test]
+    fn the_search_menu_lists_find_find_next_and_go_to_line() {
+        let mut ed = app();
+        keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT); // open Search
+        let find = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: Find...
+        assert_eq!(find, vec![CM_FIND]);
+        keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT);
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Find Next
+        let next = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
+        assert_eq!(next, vec![CM_FIND_NEXT]);
+    }
+
+    #[test]
     fn ctrl_g_and_the_search_menu_post_go_to_line() {
         let mut ed = app();
         // The key posts it straight from the editor.
         let posted = keydown(&mut ed, KeyCode::Char('g'), Modifiers::CONTROL);
         assert_eq!(posted, vec![CM_GOTO]);
-        // And the Search menu's first item posts the same command.
+        // And the Search menu's "Go to Line..." item (third) posts the same command.
         keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT); // open Search
         assert!(ed.menu_is_open());
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Find Next
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE); // Go to Line...
         let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
         assert_eq!(posted, vec![CM_GOTO]);
     }

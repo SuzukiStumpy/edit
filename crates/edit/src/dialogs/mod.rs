@@ -8,6 +8,8 @@
 //! `CM_OK` — no downcast, no view IDs (ADR 0017/0018). See
 //! `docs/specs/editor-dialogs.md`.
 
+mod find;
 mod go_to_line;
 
+pub use find::FindDialog;
 pub use go_to_line::GoToLine;

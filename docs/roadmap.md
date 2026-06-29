@@ -259,7 +259,11 @@ single-document editor with menus, a status line, and modal Open/Save dialogs.
   - **7c.1 ✅ Go to Line** — establishes the editor's own modal-dialog pattern
     (`edit::dialogs`, a bespoke `Modal` owning its controls so the driver reads the
     value back; ADR 0017/0018) and `EditorView::go_to_line`. Search menu added.
-  - 7c.2 Find + Find Next (buffer search engine). 7c.3 Replace + Change All.
+  - **7c.2 ✅ Find + Find Next** — `edit::search` (a pure line-oriented search
+    engine: case/whole-word/direction/wrap) + the Find dialog; `find`/`find_next`
+    select and reveal matches. Ctrl+F opens Find, F3 repeats (so F3 is no longer
+    Open — that stays on the File menu, matching MS-DOS `EDIT`).
+  - 7c.3 Replace + Change All.
 
 ---
 
