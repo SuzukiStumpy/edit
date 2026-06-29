@@ -4,13 +4,13 @@
 //!
 //! It is a plain [`View`] — no terminal, no files (load/save is Phase 6b). Editing
 //! flows through the reversible [`Edit`] type (ADR 0011), journalled for undo by an
-//! owned [`History`]: every mutation goes through [`commit`](EditorView::commit),
-//! and [`undo`](EditorView::undo)/[`redo`](EditorView::redo) replay inverses. The
+//! owned `History`: every mutation goes through `commit`, and
+//! [`undo`](EditorView::undo)/[`redo`](EditorView::redo) replay inverses. The
 //! clipboard lives in the app (ADR 0019): the editor only posts `CM_CUT`/`CM_COPY`/
 //! `CM_PASTE` and exposes [`take_selection`](EditorView::take_selection) /
 //! [`insert_text`](EditorView::insert_text) for the app to drive; undo/redo, by
 //! contrast, are editor-local and handled here. Display geometry (tab expansion,
-//! wide graphemes) lives in one place, [`line_columns`], so rendering and vertical
+//! wide graphemes) lives in one place, `line_columns`, so rendering and vertical
 //! cursor motion can never disagree.
 
 use crate::history::{Coalesce, History};
