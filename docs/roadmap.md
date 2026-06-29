@@ -391,9 +391,12 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   over SSH) via `Backend::set_clipboard` + a hand-rolled Base64 `osc52` encoder
   (no crate); OSC 52 read-back is left behind the seam as fragile/terminal-gated
   (ADR 0021). *in:* bracketed paste delivers external text as one `Event::Paste`,
-  routed to the focused editor or input line (ADR 0022).
+  routed to the focused editor or input line (ADR 0022). *Least surprise:* a
+  bracketed paste mirrors into the internal clipboard (so a later Ctrl-V repeats
+  it), and an empty-clipboard Paste hints at Ctrl+Shift+V.
 - Settings persistence (hand-rolled key-value format — no serde).
-- Help system: a simplified viewer + content; About box.
+- Help system: a simplified viewer + content; About box. **TODO:** document the
+  Ctrl+V (internal) vs Ctrl+Shift+V (system) paste convention here (ADR 0021/0022).
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
 
 ---

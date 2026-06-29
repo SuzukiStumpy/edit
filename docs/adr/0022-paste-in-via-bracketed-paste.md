@@ -60,6 +60,15 @@ Model paste as a first-class event and let the terminal bracket it.
 - A terminal that supports neither bracketed paste nor OSC 52 still degrades to
   raw-keystroke paste (the old behaviour) — not great, but no worse than before,
   and such terminals are rare.
+- **The two pastes don't unify, and can't.** `Ctrl-V` / Edit→Paste paste the
+  editor's internal clipboard; external text only enters via the terminal's own
+  paste (`Ctrl+Shift+V`), because a terminal app cannot read the system clipboard
+  or trigger a paste itself (OSC 52 read stays rejected, ADR 0021). To soften the
+  surprise (least astonishment): a bracketed paste also *mirrors* into the
+  internal clipboard, so the two converge after first contact and a later `Ctrl-V`
+  repeats the external text; and invoking Paste with an empty internal clipboard
+  shows a one-line hint pointing at `Ctrl+Shift+V` (rare once anything is copied).
+  Documenting the convention in the help/About is left to the Help-system item.
 
 ## Alternatives considered
 

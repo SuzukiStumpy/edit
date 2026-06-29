@@ -973,8 +973,12 @@ impl EditorApp {
             Event::Mouse(mouse) => {
                 self.handle_mouse(mouse, &mut ctx);
             }
-            // A bracketed paste goes straight to the active editor (ADR 0022).
-            Event::Paste(_) => {
+            // A bracketed paste goes to the active editor, and also refreshes the
+            // internal clipboard so a later Ctrl-V repeats the same external text
+            // (least surprise — the two clipboards converge after first contact;
+            // ADR 0022).
+            Event::Paste(text) => {
+                self.clipboard = text.clone();
                 if !self.documents.is_empty() {
                     self.doc_mut().editor.handle_event(event, &mut ctx);
                 }
@@ -1199,8 +1203,22 @@ fn handle_command<T: Backend + EventSource>(
     // also mirror the internal clipboard to the host via OSC 52 — write-only, so
     // Paste still reads the internal buffer (ADR 0021).
     if ed.handle_clipboard(command) {
-        if matches!(command, CM_COPY | CM_CUT) {
-            app.set_clipboard(ed.clipboard())?;
+        match command {
+            CM_COPY | CM_CUT => app.set_clipboard(ed.clipboard())?,
+            // An empty internal clipboard on Paste is where users hit the
+            // "Ctrl-V didn't grab another app's text" surprise — explain it,
+            // since a terminal app cannot read the system clipboard itself
+            // (ADR 0021/0022). After any copy or external paste this is rare.
+            CM_PASTE if ed.clipboard().is_empty() && ed.window_count() > 0 => message(
+                app,
+                ed,
+                theme,
+                "Paste",
+                "The editor clipboard is empty.\n\n\
+                 To paste text from another application, use your terminal's \
+                 paste — usually Ctrl+Shift+V.",
+            )?,
+            _ => {}
         }
         return Ok(());
     }
@@ -1594,13 +1612,15 @@ mod tests {
     }
 
     #[test]
-    fn a_bracketed_paste_reaches_the_active_editor() {
-        // Inbound paste (ADR 0022): the driver routes Event::Paste to the editor.
+    fn a_bracketed_paste_reaches_the_active_editor_and_mirrors_the_clipboard() {
+        // Inbound paste (ADR 0022): the driver routes Event::Paste to the editor…
         let mut ed = app();
         let cs = CommandSet::new();
         let posted = ed.dispatch(&Event::Paste("pasted\ntext".to_string()), &cs);
         assert!(posted.is_empty());
         assert_eq!(ed.active_editor().text(), "pasted\ntext");
+        // …and refreshes the internal clipboard, so a later Ctrl-V repeats it.
+        assert_eq!(ed.clipboard(), "pasted\ntext");
     }
 
     #[test]
