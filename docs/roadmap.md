@@ -295,11 +295,12 @@ tile, zoom, close; Alt+1…9 to switch (ADR 0009). `edit::app` owns its document
 
 ---
 
-## Phase 9 — Mouse
+## Phase 9 — Mouse ✅
 
 Fill in mouse *behaviour* across widgets (the positional dispatch phase has
 existed since Phase 3, ADR 0004/0007): click-to-focus, menu/button/scrollbar
-interaction, window move/resize by drag, drag-select in the editor.
+interaction, window move/resize by drag, drag-select in the editor. The one
+remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 
 - **9a ✅** Enable capture + the editor-app routing seam — `CrosstermBackend`
   now sends `EnableMouseCapture`/`DisableMouseCapture` around the alternate
