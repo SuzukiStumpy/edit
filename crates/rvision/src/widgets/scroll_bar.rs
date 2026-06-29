@@ -1,10 +1,12 @@
 //! A scroll-bar indicator (TurboVision's `TScrollBar`), vertical or horizontal.
 //!
-//! A drawn indicator only: a pair of arrows, a track, and a thumb whose position
-//! reflects how far a viewport has scrolled. Dragging it with the mouse is Phase
-//! 9 (ADR 0007); for now a [`ListBox`](super::ListBox) draws a vertical one to
-//! show where its selection sits, and the editor draws both along its window
-//! frame to show its position in a longer/wider document.
+//! A pair of arrows, a track, and a thumb whose position reflects how far a
+//! viewport has scrolled. [`hit`](ScrollBar::hit) classifies a click into a
+//! [`ScrollPart`] (arrow / track page / thumb) so a caller can scroll; thumb
+//! *dragging* rides on the window drag infrastructure (Phase 9d, ADR 0007). A
+//! [`ListBox`](super::ListBox) draws a vertical one to show where its selection
+//! sits, and the editor draws both along its window frame to show its position in
+//! a longer/wider document.
 
 use crate::canvas::Canvas;
 use crate::cell::Cell;
@@ -18,6 +20,21 @@ const LEFT: char = '◄';
 const RIGHT: char = '►';
 const TRACK: char = '▒';
 const THUMB: char = '█';
+
+/// Which part of a [`ScrollBar`] a click landed on (TurboVision's scroll parts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollPart {
+    /// The start arrow (▲ / ◄): step back one.
+    LineUp,
+    /// The end arrow (▼ / ►): step forward one.
+    LineDown,
+    /// The track before the thumb: page back.
+    PageUp,
+    /// The track past the thumb: page forward.
+    PageDown,
+    /// The thumb itself (where a drag would begin).
+    Thumb,
+}
 
 /// Which way a [`ScrollBar`] runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +98,35 @@ impl ScrollBar {
         let pos = self.pos.min(max_pos);
         let span = track_len as usize - 1;
         ((pos * span + max_pos / 2) / max_pos) as i16
+    }
+
+    /// Classifies a click at `point` (in the bar's own coordinate space, the same
+    /// as [`bounds`](ScrollBar::bounds)) into a [`ScrollPart`], or `None` if it is
+    /// off the bar. Arrows are the two end cells, the thumb is wherever
+    /// [`draw`](View::draw) paints it, and the rest of the track pages.
+    pub fn hit(&self, point: Point) -> Option<ScrollPart> {
+        let (len, off) = match self.orientation {
+            Orientation::Vertical => (self.bounds.height(), point.y - self.bounds.origin().y),
+            Orientation::Horizontal => (self.bounds.width(), point.x - self.bounds.origin().x),
+        };
+        if off < 0 || off >= len {
+            return None;
+        }
+        if len == 1 {
+            return Some(ScrollPart::Thumb); // a one-cell bar is all thumb
+        }
+        if off == 0 {
+            return Some(ScrollPart::LineUp);
+        }
+        if off == len - 1 {
+            return Some(ScrollPart::LineDown);
+        }
+        let thumb = 1 + self.thumb_offset(len - 2);
+        Some(match off.cmp(&thumb) {
+            std::cmp::Ordering::Less => ScrollPart::PageUp,
+            std::cmp::Ordering::Greater => ScrollPart::PageDown,
+            std::cmp::Ordering::Equal => ScrollPart::Thumb,
+        })
     }
 }
 
@@ -183,5 +229,53 @@ mod tests {
         // At the bottom (pos == total - visible) it sits just above the down arrow.
         bar.set_metrics(10, 4, 6);
         assert_eq!(glyph(&render(&bar, 6), 4), "█");
+    }
+
+    // --- hit-testing (Phase 9c.2) ---
+
+    fn vbar(pos: usize) -> ScrollBar {
+        // 6 tall: arrows at rows 0 and 5, a 4-cell track (rows 1..5).
+        let mut bar = ScrollBar::new(
+            Rect::from_origin_size(Point::new(0, 0), Size::new(1, 6)),
+            Style::new(),
+        );
+        bar.set_metrics(10, 4, pos); // thumb at row 1 (pos 0) .. row 4 (pos 6)
+        bar
+    }
+
+    #[test]
+    fn the_end_cells_are_the_arrows() {
+        let bar = vbar(0);
+        assert_eq!(bar.hit(Point::new(0, 0)), Some(ScrollPart::LineUp));
+        assert_eq!(bar.hit(Point::new(0, 5)), Some(ScrollPart::LineDown));
+    }
+
+    #[test]
+    fn the_thumb_cell_is_the_thumb_and_the_track_pages() {
+        let bar = vbar(0); // thumb at row 1
+        assert_eq!(bar.hit(Point::new(0, 1)), Some(ScrollPart::Thumb));
+        assert_eq!(bar.hit(Point::new(0, 3)), Some(ScrollPart::PageDown));
+        let bar = vbar(6); // thumb at row 4
+        assert_eq!(bar.hit(Point::new(0, 2)), Some(ScrollPart::PageUp));
+        assert_eq!(bar.hit(Point::new(0, 4)), Some(ScrollPart::Thumb));
+    }
+
+    #[test]
+    fn a_point_off_the_bar_hits_nothing() {
+        let bar = vbar(0);
+        assert_eq!(bar.hit(Point::new(0, 6)), None);
+        assert_eq!(bar.hit(Point::new(0, -1)), None);
+    }
+
+    #[test]
+    fn hit_respects_the_bars_origin() {
+        // A bar that does not start at the origin: offsets are measured from it.
+        let mut bar = ScrollBar::new(
+            Rect::from_origin_size(Point::new(0, 2), Size::new(1, 6)),
+            Style::new(),
+        );
+        bar.set_metrics(10, 4, 0);
+        assert_eq!(bar.hit(Point::new(0, 2)), Some(ScrollPart::LineUp));
+        assert_eq!(bar.hit(Point::new(0, 7)), Some(ScrollPart::LineDown));
     }
 }

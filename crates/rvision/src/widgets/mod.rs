@@ -43,6 +43,6 @@ pub use list_box::ListBox;
 pub use menu::{Menu, MenuBar, MenuItem};
 pub use message_box::MessageBox;
 pub use radio_buttons::RadioButtons;
-pub use scroll_bar::{Orientation, ScrollBar};
+pub use scroll_bar::{Orientation, ScrollBar, ScrollPart};
 pub use status::{StatusItem, StatusLine};
 pub use window::Window;

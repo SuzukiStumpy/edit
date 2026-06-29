@@ -322,8 +322,12 @@ interaction, window move/resize by drag, drag-select in the editor.
     moving the caret. `EditorApp` focuses the window on a press, routes an
     interior press / any drag to the editor, and sends the wheel to the window
     under the pointer.
-  - **9c.2** Scroll bars — clicking the window's scroll bars (drawn on the
-    border) scrolls; drag the thumb.
+  - **9c.2 ✅** Scroll bars — `ScrollBar::hit` classifies a click into a
+    `ScrollPart` (arrow / track page / thumb); `EditorApp` hit-tests each
+    window's bars (geometry shared with the drawing via `vscroll_rect`/
+    `hscroll_rect`) and applies it through `EditorView::scroll_lines`/
+    `scroll_cols` — arrows step a line/column, the track pages by a viewport.
+    Thumb *dragging* rides on the window drag work (9d).
 - **9d** Window chrome drag — title-bar drag to move, border/corner to resize,
   click the close/zoom glyphs.
 - **9e** Dialog controls — `Button`, `InputLine`, `CheckBox`, `RadioButtons`,

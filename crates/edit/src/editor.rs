@@ -306,15 +306,20 @@ impl EditorView {
     pub fn scroll_metrics(&self) -> ScrollMetrics {
         ScrollMetrics {
             lines: self.doc.line_count(),
-            content_width: (0..self.doc.line_count())
-                .filter_map(|i| self.doc.line(i))
-                .map(|line| display_width(line, self.tab_width))
-                .max()
-                .unwrap_or(0),
+            content_width: self.content_width(),
             viewport: self.bounds.size(),
             top: self.top,
             left: self.left,
         }
+    }
+
+    /// The widest line's display width — the document's horizontal extent.
+    fn content_width(&self) -> i16 {
+        (0..self.doc.line_count())
+            .filter_map(|i| self.doc.line(i))
+            .map(|line| display_width(line, self.tab_width))
+            .max()
+            .unwrap_or(0)
     }
 
     // --- geometry ---
@@ -387,11 +392,19 @@ impl EditorView {
     // --- scrolling ---
 
     /// Scrolls the viewport vertically by `delta` lines (negative = up) **without**
-    /// moving the caret — the wheel pans the view, like every editor. Clamped so the
-    /// first line never scrolls above the top.
-    fn scroll_lines(&mut self, delta: i16) {
+    /// moving the caret — the wheel and the vertical scroll bar pan the view, like
+    /// every editor. Clamped so the first line never scrolls above the top.
+    pub fn scroll_lines(&mut self, delta: i16) {
         let max_top = self.doc.line_count().saturating_sub(1) as i16;
         self.top = (self.top as i16 + delta).clamp(0, max_top) as usize;
+    }
+
+    /// Scrolls the viewport horizontally by `delta` display columns (negative =
+    /// left) without moving the caret. Clamped to the document's width so it never
+    /// scrolls past the longest line.
+    pub fn scroll_cols(&mut self, delta: i16) {
+        let max_left = (self.content_width() - 1).max(0);
+        self.left = (self.left + delta).clamp(0, max_left);
     }
 
     // --- mouse ---

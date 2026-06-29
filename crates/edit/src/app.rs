@@ -26,7 +26,8 @@ use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, View};
 use rvision::widgets::{
-    FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, ScrollBar, StatusItem, StatusLine,
+    FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, Orientation, ScrollBar, ScrollPart,
+    StatusItem, StatusLine,
 };
 
 use crate::dialogs::{FindDialog, GoToLine, ReplaceDialog};
@@ -163,6 +164,19 @@ fn inset1(rect: Rect) -> Rect {
         rect.origin().offset(1, 1),
         Size::new((width - 2).max(0), (height - 2).max(0)),
     )
+}
+
+/// The vertical scroll bar's rectangle within a window of `size`: the right
+/// border between the top and bottom corners, origin-relative to the window.
+/// Shared by drawing and mouse hit-testing so they can't drift.
+fn vscroll_rect(size: Size) -> Rect {
+    Rect::from_origin_size(Point::new(size.width - 1, 1), Size::new(1, size.height - 2))
+}
+
+/// The horizontal scroll bar's rectangle within a window of `size`: the bottom
+/// border between the left and right corners, origin-relative to the window.
+fn hscroll_rect(size: Size) -> Rect {
+    Rect::from_origin_size(Point::new(1, size.height - 1), Size::new(size.width - 2, 1))
 }
 
 /// The smallest window that still has a usable interior (a 1-cell border plus at
@@ -330,6 +344,67 @@ impl EditorApp {
         self.draw_order().into_iter().rev().find(|&i| {
             !self.window_rect_screen(i).is_empty() && self.window_rect_screen(i).contains(pos)
         })
+    }
+
+    /// If screen point `pos` is on window `i`'s scroll bar, which bar and which part
+    /// of it. Rebuilds the bar with the editor's current metrics (the same way
+    /// [`draw_scrollbars`](Self::draw_scrollbars) does) so the click target matches
+    /// what is drawn.
+    fn scrollbar_hit(&self, i: usize, pos: Point) -> Option<(Orientation, ScrollPart)> {
+        let area = self.window_rect_screen(i);
+        let o = area.origin();
+        let m = self.documents[i].editor.scroll_metrics();
+        let screen = |local: Rect| {
+            Rect::from_origin_size(o.offset(local.origin().x, local.origin().y), local.size())
+        };
+
+        let vbar = screen(vscroll_rect(area.size()));
+        if !vbar.is_empty() && vbar.contains(pos) {
+            let mut bar = ScrollBar::new(vbar, self.frame_style);
+            bar.set_metrics(m.lines, m.viewport.height.max(0) as usize, m.top);
+            return bar.hit(pos).map(|part| (Orientation::Vertical, part));
+        }
+        let hbar = screen(hscroll_rect(area.size()));
+        if !hbar.is_empty() && hbar.contains(pos) {
+            let mut bar = ScrollBar::horizontal(hbar, self.frame_style);
+            bar.set_metrics(
+                m.content_width.max(0) as usize,
+                m.viewport.width.max(0) as usize,
+                m.left.max(0) as usize,
+            );
+            return bar.hit(pos).map(|part| (Orientation::Horizontal, part));
+        }
+        None
+    }
+
+    /// Applies a scroll-bar click on window `i`'s editor: the arrows step a line/
+    /// column, the track pages by the viewport extent, the thumb does nothing yet
+    /// (dragging is Phase 9d).
+    fn apply_scroll(&mut self, i: usize, orientation: Orientation, part: ScrollPart) {
+        let m = self.documents[i].editor.scroll_metrics();
+        let editor = &mut self.documents[i].editor;
+        match orientation {
+            Orientation::Vertical => {
+                let page = m.viewport.height.max(1);
+                match part {
+                    ScrollPart::LineUp => editor.scroll_lines(-1),
+                    ScrollPart::LineDown => editor.scroll_lines(1),
+                    ScrollPart::PageUp => editor.scroll_lines(-page),
+                    ScrollPart::PageDown => editor.scroll_lines(page),
+                    ScrollPart::Thumb => {}
+                }
+            }
+            Orientation::Horizontal => {
+                let page = m.viewport.width.max(1);
+                match part {
+                    ScrollPart::LineUp => editor.scroll_cols(-1),
+                    ScrollPart::LineDown => editor.scroll_cols(1),
+                    ScrollPart::PageUp => editor.scroll_cols(-page),
+                    ScrollPart::PageDown => editor.scroll_cols(page),
+                    ScrollPart::Thumb => {}
+                }
+            }
+        }
     }
 
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
@@ -640,9 +715,11 @@ impl EditorApp {
                 if i != self.active {
                     self.activate(i);
                 }
-                // A press in the interior places the caret; on the frame it is a
-                // (later) move/resize, so just the focus change above.
-                if inset1(self.window_rect_screen(self.active)).contains(mouse.pos) {
+                // A press on a scroll bar scrolls; in the interior places the caret;
+                // on the rest of the frame it is a (later) move/resize.
+                if let Some((orientation, part)) = self.scrollbar_hit(self.active, mouse.pos) {
+                    self.apply_scroll(self.active, orientation, part);
+                } else if inset1(self.window_rect_screen(self.active)).contains(mouse.pos) {
                     self.doc_mut()
                         .editor
                         .handle_event(&Event::Mouse(*mouse), ctx);
@@ -785,11 +862,10 @@ impl EditorApp {
     /// bottom border, reflecting `editor`'s position in its document. `win` is the
     /// window's canvas and `area` its local bounds (`(0, 0)`-origin).
     fn draw_scrollbars(&self, win: &mut Canvas, area: Rect, editor: &EditorView) {
-        let Size { width, height } = area.size();
         let m = editor.scroll_metrics();
 
         // Vertical bar on the right border, between the top and bottom corners.
-        let vbar = Rect::from_origin_size(Point::new(width - 1, 1), Size::new(1, height - 2));
+        let vbar = vscroll_rect(area.size());
         if !vbar.is_empty() {
             let mut bar = ScrollBar::new(vbar, self.frame_style);
             bar.set_metrics(m.lines, m.viewport.height.max(0) as usize, m.top);
@@ -797,7 +873,7 @@ impl EditorApp {
         }
 
         // Horizontal bar on the bottom border, between the left and right corners.
-        let hbar = Rect::from_origin_size(Point::new(1, height - 1), Size::new(width - 2, 1));
+        let hbar = hscroll_rect(area.size());
         if !hbar.is_empty() {
             let mut bar = ScrollBar::horizontal(hbar, self.frame_style);
             bar.set_metrics(
@@ -1737,6 +1813,35 @@ mod tests {
         left_click(&mut ed, 4, 2); // editor-local column 3 on the first line
         assert_eq!(ed.active_editor().cursor().line, 0);
         assert_eq!(ed.active_editor().cursor().column, 3);
+    }
+
+    #[test]
+    fn clicking_the_vertical_bar_down_arrow_scrolls_a_line() {
+        let mut ed = app(); // zoomed window over a (40, 10) desktop
+        ed.active_editor_mut().set_text(&"line\n".repeat(30));
+        assert_eq!(ed.active_editor().scroll_metrics().top, 0);
+        left_click(&mut ed, 39, 9); // the ▼ at the foot of the right-hand bar
+        assert_eq!(ed.active_editor().scroll_metrics().top, 1);
+    }
+
+    #[test]
+    fn clicking_the_vertical_bar_track_below_the_thumb_pages_down() {
+        let mut ed = app();
+        ed.active_editor_mut().set_text(&"line\n".repeat(30));
+        left_click(&mut ed, 39, 6); // track between the thumb and the ▼
+        assert_eq!(
+            ed.active_editor().scroll_metrics().top,
+            8, // one viewport (the interior is 8 rows tall)
+        );
+    }
+
+    #[test]
+    fn clicking_the_horizontal_bar_right_arrow_scrolls_a_column() {
+        let mut ed = app();
+        ed.active_editor_mut().set_text(&"x".repeat(100));
+        assert_eq!(ed.active_editor().scroll_metrics().left, 0);
+        left_click(&mut ed, 38, 10); // the ► at the end of the bottom bar
+        assert_eq!(ed.active_editor().scroll_metrics().left, 1);
     }
 
     #[test]
