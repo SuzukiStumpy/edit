@@ -27,5 +27,6 @@ rewriting an old one.
 | [0019](0019-clipboard-app-owned-command-routed.md) | Clipboard is app-owned and reached by commands |
 | [0020](0020-drop-shadows-per-view-protocol.md) | Drop shadows are a per-view protocol (`View::drop_shadow`) |
 | [0021](0021-system-clipboard-osc52-write-only.md) | System clipboard via OSC 52, write-only (`Backend::set_clipboard`) |
+| [0022](0022-paste-in-via-bracketed-paste.md) | Paste-in via bracketed paste (`Event::Paste`) |
 
 New decision? Copy [`0000-template.md`](0000-template.md).

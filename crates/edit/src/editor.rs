@@ -924,6 +924,12 @@ impl View for EditorView {
         let key = match event {
             Event::Key(key) => key,
             Event::Mouse(mouse) => return self.handle_mouse(mouse),
+            // A bracketed paste inserts verbatim at the caret, replacing any
+            // selection — the same reversible edit a Ctrl-V paste makes (ADR 0022).
+            Event::Paste(text) => {
+                self.insert_text(text);
+                return EventResult::Consumed;
+            }
             _ => return EventResult::Ignored,
         };
         let shift = key.modifiers.contains(Modifiers::SHIFT);
@@ -1258,6 +1264,23 @@ mod tests {
         assert_eq!(e.text(), "HI world");
         assert_eq!(e.cursor(), Position::new(0, 2));
         assert_eq!(e.selected_text(), None);
+    }
+
+    #[test]
+    fn a_bracketed_paste_inserts_at_the_caret_replacing_any_selection() {
+        let mut e = editor(20, 5).clone_doc("hello world");
+        for _ in 0..5 {
+            press(&mut e, KeyCode::Right, Modifiers::SHIFT); // select "hello"
+        }
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = e.handle_event(&Event::Paste("HI\nYO".to_string()), &mut ctx);
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(e.text(), "HI\nYO world");
+        assert!(
+            ctx.take_posted().is_empty(),
+            "paste is inserted in place, it posts no command"
+        );
     }
 
     #[test]

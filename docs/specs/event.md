@@ -26,6 +26,7 @@ pub enum Event {
     Command(Command),   // a posted UI command (Phase 3 builds bubbling around it)
     Broadcast(Command), // a command delivered to all (payload grows later)
     Resize(Size),       // the terminal's new size
+    Paste(String),      // a bracketed paste, delivered as one chunk (ADR 0022)
     Idle,               // the poll timeout elapsed — drives blink/idle
 }
 
@@ -50,7 +51,11 @@ pub enum MouseButton { Left, Right, Middle }
 pub struct Command(pub u16);
 ```
 
-Every event type is `Copy`: nothing carries heap data, so dispatch never clones.
+`Event` is `Clone` but not `Copy` since `Paste` owns a `String` (ADR 0022); every
+other variant is heap-free, and dispatch passes events by reference, so a clone is
+rare. The smaller types (`KeyEvent`, `MouseEvent`, `Command`, …) stay `Copy`.
+`Paste` is a focused-phase event: a `Group` routes it to the focused child, like a
+key.
 
 ## Behaviour & invariants
 

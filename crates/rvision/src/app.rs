@@ -445,6 +445,8 @@ impl View for Shell {
             // A re-dispatched command (ADR 0003) goes to the active window; CM_QUIT
             // never reaches here — `Root` claims it before re-dispatch.
             Event::Command(_) => self.desktop.handle_event(event, ctx),
+            // A paste goes to the active window, like a key (ADR 0022).
+            Event::Paste(_) => self.desktop.handle_event(event, ctx),
             Event::Resize(size) => {
                 self.relayout(*size);
                 self.desktop.handle_event(event, ctx);
@@ -556,7 +558,7 @@ mod tests {
         }
 
         fn handle_event(&mut self, event: &Event) -> EventResult {
-            self.seen.push(*event);
+            self.seen.push(event.clone());
             if let Event::Key(KeyEvent {
                 code: KeyCode::Char('q'),
                 modifiers,

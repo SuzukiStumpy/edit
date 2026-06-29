@@ -50,6 +50,9 @@ impl CrosstermBackend {
         let mut out = io::stdout();
         out.execute(EnterAlternateScreen)?;
         out.execute(ct::EnableMouseCapture)?;
+        // Ask the terminal to bracket pasted text so we receive it as one
+        // `Event::Paste` rather than a burst of fake keystrokes (ADR 0022).
+        out.execute(ct::EnableBracketedPaste)?;
         out.execute(Hide)?;
         let (cols, rows) = terminal::size()?;
         let size = Size::new(cols as i16, rows as i16);
@@ -134,6 +137,7 @@ fn restore_terminal() {
     let mut out = io::stdout();
     let _ = out.execute(Show);
     let _ = out.execute(ct::DisableMouseCapture);
+    let _ = out.execute(ct::DisableBracketedPaste);
     let _ = out.execute(LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
 }
@@ -152,14 +156,16 @@ fn install_panic_hook() {
 }
 
 /// Translates a raw crossterm event into our backend-agnostic [`Event`], or
-/// `None` for events we do not model (focus changes, bracketed paste, key
-/// releases). Pure — this is the unit-tested core of the backend.
+/// `None` for events we do not model (focus changes, key releases). Pure — this
+/// is the unit-tested core of the backend.
 fn map_event(event: ct::Event) -> Option<Event> {
     match event {
         ct::Event::Key(key) => map_key(key).map(Event::Key),
         ct::Event::Mouse(mouse) => map_mouse(mouse).map(Event::Mouse),
         ct::Event::Resize(cols, rows) => Some(Event::Resize(Size::new(cols as i16, rows as i16))),
-        ct::Event::FocusGained | ct::Event::FocusLost | ct::Event::Paste(_) => None,
+        // Bracketed paste arrives as one chunk (ADR 0022).
+        ct::Event::Paste(text) => Some(Event::Paste(text)),
+        ct::Event::FocusGained | ct::Event::FocusLost => None,
     }
 }
 
@@ -364,10 +370,17 @@ mod tests {
     }
 
     #[test]
+    fn maps_bracketed_paste_to_a_paste_event() {
+        assert_eq!(
+            map_event(ct::Event::Paste("two\nlines".into())),
+            Some(Event::Paste("two\nlines".to_string()))
+        );
+    }
+
+    #[test]
     fn drops_unmodelled_events() {
-        // Focus changes and pastes are not modelled.
+        // Focus changes are not modelled.
         assert_eq!(map_event(ct::Event::FocusGained), None);
-        assert_eq!(map_event(ct::Event::Paste("hi".into())), None);
 
         // Key *releases* are dropped so a press/release pair is one logical event.
         let release = ct::Event::Key(ct::KeyEvent::new_with_kind(

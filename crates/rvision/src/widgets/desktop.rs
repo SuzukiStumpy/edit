@@ -86,8 +86,8 @@ impl View for Desktop {
                 EventResult::Ignored
             }
             // Focused: only the active window. Its ignored result bubbles up so the
-            // shell can try the status line next (ADR 0016).
-            Event::Key(_) | Event::Command(_) => match self.active {
+            // shell can try the status line next (ADR 0016). Paste rides along.
+            Event::Key(_) | Event::Command(_) | Event::Paste(_) => match self.active {
                 Some(index) => self.windows[index].handle_event(event, ctx),
                 None => EventResult::Ignored,
             },
@@ -135,7 +135,7 @@ mod tests {
         }
         fn draw(&self, _canvas: &mut Canvas) {}
         fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-            self.log.borrow_mut().push((self.tag, *event));
+            self.log.borrow_mut().push((self.tag, event.clone()));
             if matches!(event, Event::Key(k) if k.code == KeyCode::Enter) {
                 ctx.post(self.command);
                 return EventResult::Consumed;

@@ -158,7 +158,7 @@ mod tests {
             canvas.put_str(Point::new(0, 0), "in", Style::new());
         }
         fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-            self.seen.borrow_mut().push(*event);
+            self.seen.borrow_mut().push(event.clone());
             if matches!(event, Event::Key(k) if k.code == KeyCode::Enter) {
                 ctx.post(CM_OK);
                 return EventResult::Consumed;

@@ -973,6 +973,12 @@ impl EditorApp {
             Event::Mouse(mouse) => {
                 self.handle_mouse(mouse, &mut ctx);
             }
+            // A bracketed paste goes straight to the active editor (ADR 0022).
+            Event::Paste(_) => {
+                if !self.documents.is_empty() {
+                    self.doc_mut().editor.handle_event(event, &mut ctx);
+                }
+            }
             // Resize is handled by the driver (relayout).
             Event::Resize(_) | Event::Command(_) => {}
         }
@@ -1585,6 +1591,16 @@ mod tests {
                 "{command:?} should push the selection to the host clipboard"
             );
         }
+    }
+
+    #[test]
+    fn a_bracketed_paste_reaches_the_active_editor() {
+        // Inbound paste (ADR 0022): the driver routes Event::Paste to the editor.
+        let mut ed = app();
+        let cs = CommandSet::new();
+        let posted = ed.dispatch(&Event::Paste("pasted\ntext".to_string()), &cs);
+        assert!(posted.is_empty());
+        assert_eq!(ed.active_editor().text(), "pasted\ntext");
     }
 
     #[test]

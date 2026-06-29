@@ -210,6 +210,17 @@ impl View for InputLine {
             }
             return EventResult::Ignored;
         }
+        // A bracketed paste drops its text in at the caret; a single-line field
+        // takes only the printable characters, flattening any newlines (ADR 0022).
+        if let Event::Paste(text) = event {
+            if !self.focused {
+                return EventResult::Ignored;
+            }
+            for c in text.chars().filter(|c| !c.is_control()) {
+                self.insert(c);
+            }
+            return EventResult::Consumed;
+        }
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
@@ -304,6 +315,16 @@ mod tests {
             }),
             &mut ctx,
         )
+    }
+
+    #[test]
+    fn a_bracketed_paste_inserts_printables_and_flattens_newlines() {
+        let mut input = focused(20);
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = input.handle_event(&Event::Paste("a\nb c".to_string()), &mut ctx);
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(input.text(), "ab c", "newline dropped, the space kept");
     }
 
     #[test]

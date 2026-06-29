@@ -312,7 +312,10 @@ impl View for Group {
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
         match event {
             Event::Mouse(mouse) => self.dispatch_positional(*mouse, ctx),
-            Event::Key(_) | Event::Command(_) => self.dispatch_focused(event, ctx),
+            // Paste, like a key, goes to the focused child (e.g. an input line).
+            Event::Key(_) | Event::Command(_) | Event::Paste(_) => {
+                self.dispatch_focused(event, ctx)
+            }
             Event::Broadcast(_) | Event::Resize(_) | Event::Idle => {
                 self.dispatch_broadcast(event, ctx)
             }
@@ -393,7 +396,7 @@ mod tests {
         }
 
         fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-            self.log.borrow_mut().push((self.id, *event));
+            self.log.borrow_mut().push((self.id, event.clone()));
             if let (Event::Key(key), Some((code, command))) = (event, self.post) {
                 if key.code == code {
                     ctx.post(command);

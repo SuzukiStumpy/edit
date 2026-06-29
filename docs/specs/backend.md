@@ -68,12 +68,16 @@ impl Backend for TestBackend { /* ... */ }
 
 ### `CrosstermBackend` (Phase 2, in `crossterm_backend`)
 
-- `new()` enters raw mode + the alternate screen and hides the cursor; `Drop`
-  reverses all three. Restore is idempotent and also wired into a panic hook so a
-  crash leaves the terminal usable and its message readable (ADR 0001).
+- `new()` enters raw mode + the alternate screen, enables mouse capture and
+  bracketed paste, and hides the cursor; `Drop` reverses them. Restore is
+  idempotent and also wired into a panic hook so a crash leaves the terminal
+  usable and its message readable (ADR 0001).
 - `poll_event` is `crossterm::event::poll` then `read`, mapped to our `Event` by a
-  pure `map_event` function (the only unit-tested part — no TTY needed). Unmapped
-  crossterm events (focus, paste, key *release*) become `Ok(None)`.
+  pure `map_event` function (the only unit-tested part — no TTY needed). A
+  bracketed paste maps to `Event::Paste` (ADR 0022); unmapped crossterm events
+  (focus, key *release*) become `Ok(None)`.
+- `set_clipboard` writes the OSC 52 escape (ADR 0021); a hand-rolled Base64
+  encoder lives in `osc52`.
 - On a resize it updates its cached `size`, blanks its front buffer, and clears the
   physical screen, so the loop's next full draw repaints cleanly at the new size.
 

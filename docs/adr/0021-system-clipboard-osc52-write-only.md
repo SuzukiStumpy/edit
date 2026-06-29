@@ -45,9 +45,10 @@ clipboard to the host; **Paste keeps reading the internal buffer**.
   as ADR 0019 left it. The decision of *what* to push is the editor's (`clipboard()`);
   the *I/O* is the driver's — the same split ADR 0019 used for the commands.
 
-Inbound text from other apps still works without read-back: the terminal's own
-paste (bracketed paste / middle-click) delivers the system clipboard to the editor
-as ordinary typed input, which the editor already inserts.
+Inbound text from other apps is handled separately, also without read-back, via
+the terminal's bracketed-paste protocol. (This ADR first claimed it would "ride"
+the terminal's paste as typed input with no work; that proved wrong — see
+**ADR 0022**, which enables bracketed paste and adds an `Event::Paste`.)
 
 ## Consequences
 
