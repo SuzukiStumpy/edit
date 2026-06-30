@@ -396,7 +396,8 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   it), and an empty-clipboard Paste hints at Ctrl+Shift+V.
 - Settings persistence (hand-rolled key-value format — no serde).
 - Help system: a simplified viewer + content; About box. **TODO:** document the
-  Ctrl+V (internal) vs Ctrl+Shift+V (system) paste convention here (ADR 0021/0022).
+  Ctrl+V (internal) vs Ctrl+Shift+V (system) paste convention here (ADR 0021/0022);
+  needs a word-wrap helper (see Backlog) so callers pass prose, not pre-broken lines.
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
 
 ---
@@ -409,3 +410,26 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   (Phase 10).
 - **Legacy encodings / gap buffer / rope** — behind their seams (decode layer,
   `TextBuffer` trait); add only if a real need appears, each via a new ADR.
+
+---
+
+## Backlog / unscheduled
+
+Captured so they aren't lost; none are scheduled into a phase yet. Roughly
+ordered by how much shared machinery they need.
+
+- **Word-wrapping dialog text.** Today `MessageBox` splits on `\n` and the
+  *caller* pre-wraps long lines (ADR 0022 follow-up). Add a word-wrap helper (wrap
+  to a max interior width, break on spaces) so callers pass prose; lands naturally
+  with the About/Help viewer, which will want it most.
+- **Disabled (greyed) menu items.** First deferred in Phase 4: drawing an item
+  dimmed when its command is disabled needs the `CommandSet` reachable at *draw*
+  time (the same "state-in-draw" family as focus-in-draw). Dispatch already gates
+  disabled commands (they post nothing); this is only the *visual* half.
+- **Cascading menus (submenus).** A `MenuItem` that opens a nested pull-down
+  instead of posting a command. Extends the `MenuBar` state machine (the open path
+  becomes a stack) and the overlay draw + hit-testing (ADR 0016).
+- **Right-click context menus.** A pull-down anchored at the pointer, populated per
+  context (editor vs. chrome). Reuses the `Menu` overlay and its open/closed/modal
+  state machine; the trigger becomes a right-press hit-test rather than the menu
+  bar. Best explored *after* submenus — they share the nesting/anchoring machinery.
