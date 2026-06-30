@@ -10,7 +10,7 @@
 use crate::canvas::Canvas;
 use crate::cell::Cell;
 use crate::color::Style;
-use crate::command::Command;
+use crate::command::{Command, CommandSet};
 use crate::event::{Event, EventResult, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::{Role, Theme};
@@ -72,6 +72,11 @@ pub struct MenuBar {
     highlight: usize,
     bar_style: Style,
     selected_style: Style,
+    disabled_style: Style,
+    /// Which commands are live, pushed in before a draw so disabled items can grey
+    /// themselves (the same state-in-draw "push" as `View::set_focused`). Empty by
+    /// default, so every item is enabled until the app says otherwise.
+    commands: CommandSet,
 }
 
 impl MenuBar {
@@ -85,7 +90,17 @@ impl MenuBar {
             highlight: 0,
             bar_style: theme.style(Role::MenuBar),
             selected_style: theme.style(Role::MenuSelected),
+            disabled_style: theme.style(Role::MenuDisabled),
+            commands: CommandSet::new(),
         }
+    }
+
+    /// Pushes the current command-enabled state in before a draw, so a pull-down
+    /// can grey the items whose command is disabled (ADR 0003/0004). Call it from
+    /// the same place the app keeps its [`CommandSet`] up to date; dispatch already
+    /// gates disabled commands, so this is purely the visual half.
+    pub fn sync_enabled(&mut self, commands: &CommandSet) {
+        self.commands = commands.clone();
     }
 
     /// Repositions the bar (the shell calls this as the terminal resizes).
@@ -297,7 +312,11 @@ impl MenuBar {
         canvas.draw_box(area, self.bar_style);
         for (i, item) in menu.items.iter().enumerate() {
             let row = 2 + i as i16;
-            let style = if i == self.highlight {
+            // A disabled item can't light up: it stays greyed even on the highlight
+            // row, so the whole line (fill included) reads as unavailable.
+            let style = if !self.commands.is_enabled(item.command) {
+                self.disabled_style
+            } else if i == self.highlight {
                 self.selected_style
             } else {
                 self.bar_style
@@ -538,6 +557,34 @@ mod tests {
         assert!(
             ctx.posted().is_empty(),
             "but the disabled command never fires"
+        );
+    }
+
+    #[test]
+    fn a_disabled_item_draws_greyed() {
+        // The visual half of disabled commands: an item whose command is disabled
+        // draws in Role::MenuDisabled, even when it is the highlighted row (a
+        // disabled item can't light up). Enabled items are unaffected.
+        let mut bar = bar();
+        let mut cs = CommandSet::new();
+        cs.disable(CM_NEW); // File item 0 = New (also the row highlighted on open)
+        bar.sync_enabled(&cs);
+        bar.handle_event(&key(KeyCode::F(10), Modifiers::NONE), &mut Context::new(&cs));
+
+        let mut buf = Buffer::new(Size::new(40, 6));
+        let mut root = Canvas::new(&mut buf);
+        bar.draw_overlay(&mut root);
+
+        let theme = Theme::default();
+        // New on row 2 is disabled -> greyed despite being highlighted.
+        assert_eq!(
+            buf.get(Point::new(2, 2)).unwrap().style(),
+            theme.style(Role::MenuDisabled)
+        );
+        // Open... on row 3 is enabled -> ordinary bar style.
+        assert_eq!(
+            buf.get(Point::new(2, 3)).unwrap().style(),
+            theme.style(Role::MenuBar)
         );
     }
 
