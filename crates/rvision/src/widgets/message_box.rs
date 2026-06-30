@@ -10,8 +10,15 @@ use crate::command::{CM_CANCEL, CM_NO, CM_OK, CM_YES, Command};
 use crate::geometry::{Point, Rect, Size};
 use crate::theme::Theme;
 use crate::view::View;
+use crate::wrap;
+use unicode_width::UnicodeWidthStr;
 
 use super::{Button, Dialog, Label};
+
+/// Maximum interior message width in display columns before a line is wrapped.
+/// Callers pass prose; pre-split short lines (ADR 0022) stay untouched because
+/// hard breaks survive and each is already under this width.
+const MAX_WIDTH: i16 = 50;
 
 /// Builders for the standard message boxes.
 pub struct MessageBox;
@@ -56,10 +63,12 @@ fn build(title: &str, message: &str, buttons: &[(&str, Command)], theme: &Theme)
     const GAP: i16 = 2; // columns between buttons
     const MSG_TOP: i16 = 1; // first message row (row 0 is top padding)
 
-    // The message may span lines (split on '\n'); each becomes its own centred
-    // Label, so the box grows to fit rather than spilling off its single row.
-    let lines: Vec<&str> = message.split('\n').collect();
-    let line_w = |s: &str| s.chars().count() as i16;
+    // Wrap to a sane width, then each line becomes its own centred Label so the
+    // box grows to fit rather than spilling off one row. Wrapping preserves hard
+    // '\n' breaks, so callers that pre-split short lines (ADR 0022) are untouched.
+    let wrapped = wrap::wrap(message, MAX_WIDTH as u16);
+    let lines: Vec<&str> = wrapped.iter().map(String::as_str).collect();
+    let line_w = |s: &str| s.width() as i16;
     let msg_w = lines.iter().map(|l| line_w(l)).max().unwrap_or(0);
     let n = lines.len() as i16;
 
@@ -167,6 +176,36 @@ mod tests {
         // A blank middle line counts too — it is the spacer that previously bled.
         let three = MessageBox::ok("T", "Line one.\n\nLine three.", &Theme::default());
         assert_eq!(three.size().height - one.size().height, 2);
+    }
+
+    #[test]
+    fn a_long_unbroken_message_wraps_to_keep_the_box_narrow() {
+        let long = "This is a single long line of prose that the message box \
+                    should wrap across several rows instead of letting it run \
+                    off the edge of the screen.";
+        let one = MessageBox::ok("Info", "short", &Theme::default());
+        let d = MessageBox::ok("Info", long, &Theme::default());
+        // It wrapped: the box stays near the wrap width, not the raw length…
+        assert!(
+            d.size().width <= MAX_WIDTH + 6,
+            "box width {} stayed bounded",
+            d.size().width
+        );
+        assert!(
+            (d.size().width as usize) < long.chars().count(),
+            "and is far narrower than the unwrapped message"
+        );
+        // …and grew taller, one extra row per wrapped line.
+        assert!(d.size().height > one.size().height);
+    }
+
+    #[test]
+    fn pre_split_lines_under_the_width_are_left_alone() {
+        // A caller that already split on '\n' (ADR 0022) keeps its layout: each
+        // short hard line stays its own row, none are merged.
+        let d = MessageBox::ok("T", "line one\nline two\nline three", &Theme::default());
+        let one = MessageBox::ok("T", "line one", &Theme::default());
+        assert_eq!(d.size().height - one.size().height, 2);
     }
 
     #[test]

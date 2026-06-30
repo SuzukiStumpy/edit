@@ -1219,9 +1219,9 @@ fn handle_command<T: Backend + EventSource>(
                 ed,
                 theme,
                 "Paste",
+                // Prose; MessageBox word-wraps it. Blank line keeps the paragraphs apart.
                 "The editor clipboard is empty.\n\n\
-                 To paste from another application,\n\
-                 use your terminal's paste\n\
+                 To paste from another application, use your terminal's paste \
                  (usually Ctrl+Shift+V).",
             )?,
             _ => {}
@@ -1277,8 +1277,8 @@ fn handle_command<T: Backend + EventSource>(
 }
 
 /// Shows the About box: name, version, and the one-line "what this is". A plain
-/// `MessageBox::ok` — the box grows to hold each pre-split line (ADR 0022). The
-/// richer Help viewer (and the paste-convention notes) is still to come.
+/// `MessageBox::ok`, which word-wraps the prose (blank lines keep the paragraphs
+/// apart). The richer Help viewer is still to come.
 fn about<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
@@ -1290,12 +1290,11 @@ fn about<T: Backend + EventSource>(
         theme,
         "About",
         concat!(
-            "edit  ",
+            "edit ",
             env!("CARGO_PKG_VERSION"),
             "\n\n\
-             A text-mode editor in the spirit\n\
-             of MS-DOS EDIT, on the rvision\n\
-             TurboVision-style framework.\n\n\
+             A text-mode editor in the spirit of MS-DOS EDIT, built on the \
+             rvision TurboVision-style framework.\n\n\
              A Rust learning project.",
         ),
     )

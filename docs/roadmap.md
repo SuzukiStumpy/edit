@@ -395,14 +395,17 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   bracketed paste mirrors into the internal clipboard (so a later Ctrl-V repeats
   it), and an empty-clipboard Paste hints at Ctrl+Shift+V.
 - Settings persistence (hand-rolled key-value format — no serde).
+- *Word-wrap helper ✅* — `rvision::wrap::wrap(text, width)` breaks prose to a max
+  display width on spaces, preserving hard `'\n'` breaks (spec `docs/specs/wrap.md`).
+  `MessageBox` now wraps to a 50-column max, so callers pass paragraphs; pre-split
+  short lines (ADR 0022) are untouched since hard breaks survive. About box and the
+  empty-clipboard Paste hint now pass prose.
 - Help system:
   - *About box ✅* — Help ▸ About (Alt-H) shows a plain `MessageBox::ok` with the
     name, `CARGO_PKG_VERSION`, and the one-line "what this is". `CM_ABOUT` is in
-    the `handle_command` allowlist, so it works on an empty desktop. Lines are
-    pre-split (ADR 0022) until the word-wrap helper lands.
+    the `handle_command` allowlist, so it works on an empty desktop.
   - *Still to come:* a simplified viewer + content. **TODO:** document the Ctrl+V
-    (internal) vs Ctrl+Shift+V (system) paste convention there (ADR 0021/0022);
-    needs a word-wrap helper (see Backlog) so callers pass prose, not pre-broken lines.
+    (internal) vs Ctrl+Shift+V (system) paste convention there (ADR 0021/0022).
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
 
 ---
@@ -423,10 +426,6 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 Captured so they aren't lost; none are scheduled into a phase yet. Roughly
 ordered by how much shared machinery they need.
 
-- **Word-wrapping dialog text.** Today `MessageBox` splits on `\n` and the
-  *caller* pre-wraps long lines (ADR 0022 follow-up). Add a word-wrap helper (wrap
-  to a max interior width, break on spaces) so callers pass prose; lands naturally
-  with the About/Help viewer, which will want it most.
 - **Disabled (greyed) menu items.** First deferred in Phase 4: drawing an item
   dimmed when its command is disabled needs the `CommandSet` reachable at *draw*
   time (the same "state-in-draw" family as focus-in-draw). Dispatch already gates

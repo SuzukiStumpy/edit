@@ -48,3 +48,4 @@ pub(crate) mod osc52;
 pub mod theme;
 pub mod view;
 pub mod widgets;
+pub mod wrap;
