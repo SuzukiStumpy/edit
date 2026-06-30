@@ -386,14 +386,22 @@ mod tests {
     /// A fake filesystem: `/root` holds a sub-dir and two files; `/root/sub`
     /// holds one file.
     fn fake_reader() -> Reader {
-        Box::new(|path: &Path| match path.to_str().unwrap_or_default() {
-            "/root" => vec![
-                entry("sub", true),
-                entry("a.txt", false),
-                entry("b.txt", false),
-            ],
-            "/root/sub" => vec![entry("c.txt", false)],
-            _ => vec![],
+        // Match by `Path` equality, not the raw string: navigating builds child
+        // paths with `PathBuf::join`, which uses the platform separator, so on
+        // Windows `/root` + `sub` is `/root\sub`. `Path` comparison treats `/`
+        // and `\` as equivalent there, keeping this fake filesystem cross-platform.
+        Box::new(|path: &Path| {
+            if path == Path::new("/root") {
+                vec![
+                    entry("sub", true),
+                    entry("a.txt", false),
+                    entry("b.txt", false),
+                ]
+            } else if path == Path::new("/root/sub") {
+                vec![entry("c.txt", false)]
+            } else {
+                vec![]
+            }
         })
     }
 
