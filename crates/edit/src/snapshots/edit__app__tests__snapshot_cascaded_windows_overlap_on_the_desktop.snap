@@ -2,7 +2,7 @@
 source: crates/edit/src/app.rs
 expression: buf.to_text()
 ---
- File  Edit  Search  Window       
+ File  Edit  Search  Window  Help 
 ┌─[■]───── Untitled (1) ──────[↑]┐
 │f╔═[■]════ Untitled (2) ═════[↑]╗
 │ ║second window                 ║

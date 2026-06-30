@@ -395,9 +395,14 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   bracketed paste mirrors into the internal clipboard (so a later Ctrl-V repeats
   it), and an empty-clipboard Paste hints at Ctrl+Shift+V.
 - Settings persistence (hand-rolled key-value format — no serde).
-- Help system: a simplified viewer + content; About box. **TODO:** document the
-  Ctrl+V (internal) vs Ctrl+Shift+V (system) paste convention here (ADR 0021/0022);
-  needs a word-wrap helper (see Backlog) so callers pass prose, not pre-broken lines.
+- Help system:
+  - *About box ✅* — Help ▸ About (Alt-H) shows a plain `MessageBox::ok` with the
+    name, `CARGO_PKG_VERSION`, and the one-line "what this is". `CM_ABOUT` is in
+    the `handle_command` allowlist, so it works on an empty desktop. Lines are
+    pre-split (ADR 0022) until the word-wrap helper lands.
+  - *Still to come:* a simplified viewer + content. **TODO:** document the Ctrl+V
+    (internal) vs Ctrl+Shift+V (system) paste convention there (ADR 0021/0022);
+    needs a word-wrap helper (see Backlog) so callers pass prose, not pre-broken lines.
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
 
 ---

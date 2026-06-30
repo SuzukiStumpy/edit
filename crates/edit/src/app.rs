@@ -60,6 +60,10 @@ pub const CM_TILE: Command = Command(CM_USER + 34);
 /// Window ▸ Zoom — maximise/restore the active window (also F5).
 pub const CM_ZOOM: Command = Command(CM_USER + 35);
 
+/// Help ▸ About — show the About box. Works on an empty desktop (needs no
+/// document), so it sits in the [`handle_command`] allowlist alongside New/Open.
+pub const CM_ABOUT: Command = Command(CM_USER + 40);
+
 /// One open document: its editor view, the file's path, and the [`Encoding`] to
 /// preserve on save (ADR 0010). `EditorApp` owns a `Vec<Document>` for MDI
 /// (ADR 0009), concretely rather than as `Box<dyn View>` so file/edit operations
@@ -292,6 +296,7 @@ impl EditorApp {
                         MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
                     ],
                 ),
+                Menu::new("Help", vec![MenuItem::new("About...", CM_ABOUT)]),
             ],
             theme,
         );
@@ -1225,7 +1230,7 @@ fn handle_command<T: Backend + EventSource>(
     }
     // On an empty desktop only New/Open (and Quit) do anything; the rest need a
     // document to act on, so they quietly no-op.
-    if ed.window_count() == 0 && !matches!(command, CM_NEW | CM_OPEN | CM_QUIT) {
+    if ed.window_count() == 0 && !matches!(command, CM_NEW | CM_OPEN | CM_QUIT | CM_ABOUT) {
         return Ok(());
     }
     match command {
@@ -1265,9 +1270,35 @@ fn handle_command<T: Backend + EventSource>(
         CM_CASCADE => ed.cascade(),
         CM_TILE => ed.tile(),
         CM_CLOSE => close(app, ed, theme)?,
+        CM_ABOUT => about(app, ed, theme)?,
         _ => {}
     }
     Ok(())
+}
+
+/// Shows the About box: name, version, and the one-line "what this is". A plain
+/// `MessageBox::ok` — the box grows to hold each pre-split line (ADR 0022). The
+/// richer Help viewer (and the paste-convention notes) is still to come.
+fn about<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<()> {
+    message(
+        app,
+        ed,
+        theme,
+        "About",
+        concat!(
+            "edit  ",
+            env!("CARGO_PKG_VERSION"),
+            "\n\n\
+             A text-mode editor in the spirit\n\
+             of MS-DOS EDIT, on the rvision\n\
+             TurboVision-style framework.\n\n\
+             A Rust learning project.",
+        ),
+    )
 }
 
 /// Runs the Replace dialog and replaces all matches, reporting the count.
@@ -1897,6 +1928,15 @@ mod tests {
             }
             assert_eq!(keydown(&mut ed, KeyCode::Enter, Modifiers::NONE), vec![cmd]);
         }
+    }
+
+    #[test]
+    fn the_help_menu_posts_about() {
+        let mut ed = app();
+        keydown(&mut ed, KeyCode::Char('h'), Modifiers::ALT); // open Help (About highlighted)
+        assert!(ed.menu_is_open());
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: About...
+        assert_eq!(posted, vec![CM_ABOUT]);
     }
 
     #[test]
