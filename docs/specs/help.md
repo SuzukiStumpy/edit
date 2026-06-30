@@ -105,7 +105,8 @@ impl HelpContents {
 
 ### `rvision::widgets::HelpPane` — the reusable page renderer
 
-A focusable, vertically-scrolling read-only view over one topic's body.
+A focusable read-only view over one topic's body that scrolls in **both** axes
+(prose reflows to the width, but a wide `<pre>` block can still overflow).
 
 ```rust
 pub struct HelpPane { /* bounds, rendered lines, top, focused, style */ }
@@ -119,12 +120,17 @@ impl HelpPane {
     pub fn content_width(&self) -> i16;   // widest laid-out line (for sizing)
     pub fn content_height(&self) -> i16;  // total lines (for sizing/scroll)
 }
-impl View for HelpPane { /* draw + scroll keys + wheel + scroll-bar hit */ }
+impl View for HelpPane { /* draw + scroll keys (↑↓←→/Pg/Home/End) + wheel + bars */ }
 ```
 
-`HelpPane` re-lays-out when its `bounds` width changes (reflow follows width).
-It draws a vertical `ScrollBar` in the last column only when the content
-overflows (the conditional-scroll-bar predicate, like `ListBox`/the editor).
+`HelpPane` re-lays-out when its `bounds` size changes (reflow follows width). It
+draws a vertical `ScrollBar` in the last column when the page is too tall and a
+horizontal one along the bottom when a line is too wide — each only when needed
+(the conditional-scroll-bar predicate, like `ListBox`/the editor). The two bars
+interact (each steals a row/column, which can call for the other), so they are
+decided together by a short fixed-point in `layout`. The wheel pans vertically;
+`←`/`→` and the horizontal bar pan by column; off-screen columns are clipped by
+the canvas (the visible slice is drawn at a negative x-offset).
 
 ### `rvision::command`
 
@@ -153,8 +159,9 @@ static HELP_TEXT: &str = include_str!("help.txt");
 - **`<pre>` is sacrosanct.** Preformatted lines are byte-for-byte what was
   authored between the fences — never wrapped, trimmed, or space-collapsed.
 - **Reflow uses display columns** (`wrap`, ADR 0006/0015), so CJK/wide prose
-  fits the pane exactly; a `<pre>` line wider than the pane is clipped, not
-  wrapped (rare; the viewer sizes its width to fit pre lines where it can).
+  fits the pane exactly; a `<pre>` line wider than the pane is reached by
+  **horizontal scrolling** (`←`/`→`, the bottom bar, or the wheel is vertical
+  only) — it is never wrapped or silently clipped away.
 - **Live update.** Moving the contents-list selection re-`show`s the page
   immediately (no Enter needed).
 - **Focus model.** Two focus stops: the contents `ListBox` and the `HelpPane`.
