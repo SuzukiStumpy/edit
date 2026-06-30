@@ -5,7 +5,9 @@
 //! ends; the view always scrolls to keep the selection visible. When the list is
 //! longer than the box a [`ScrollBar`](super::ScrollBar) is drawn down the right
 //! edge. `Enter` is left to bubble so the dialog's default button (e.g. *Open*)
-//! acts on the selected item.
+//! acts on the selected item. A left **double-click** selects the row like a
+//! single click; turning that into an "activate" (the Enter equivalent) is the
+//! container's job — see [`FileDialog`](super::FileDialog) (ADR 0007).
 
 use crate::canvas::Canvas;
 use crate::cell::Cell;
@@ -111,7 +113,9 @@ impl ListBox {
         let width = self.bounds.width();
         let has_bar = self.items.len() > rows && width > 1;
         match m.kind {
-            MouseKind::Down(MouseButton::Left) => {
+            // A double-click selects like a click; the container turns it into an
+            // "activate" (its Enter path). The bar is click-only.
+            MouseKind::Down(MouseButton::Left) | MouseKind::DoubleClick(MouseButton::Left) => {
                 if has_bar && m.pos.x == width - 1 {
                     let mut bar = ScrollBar::new(
                         Rect::from_origin_size(Point::new(width - 1, 0), Size::new(1, rows as i16)),
@@ -298,6 +302,15 @@ mod tests {
         mouse(&mut lb, MouseKind::Down(MouseButton::Left), 2, 2);
         assert_eq!(lb.selected(), Some(2));
         assert_eq!(lb.selected_text(), Some("c"));
+    }
+
+    #[test]
+    fn double_clicking_a_row_selects_it_like_a_click() {
+        // The "activate" (Enter-equivalent) is the container's job; the list just
+        // makes sure the right row is selected when the double-click lands.
+        let mut lb = list(10, 4, &["a", "b", "c", "d"]);
+        mouse(&mut lb, MouseKind::DoubleClick(MouseButton::Left), 2, 1);
+        assert_eq!(lb.selected(), Some(1));
     }
 
     #[test]

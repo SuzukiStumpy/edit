@@ -15,7 +15,7 @@ use crate::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent,
 use crate::geometry::{Point, Size};
 use std::io::{self, Write};
 use std::sync::Once;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event as ct;
@@ -24,6 +24,10 @@ use crossterm::style::{
 };
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{ExecutableCommand, QueueableCommand};
+
+/// The window within which a second left-press on the same cell counts as a
+/// double-click (ADR 0007). The usual desktop default.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// A [`Backend`]/[`EventSource`] over a live terminal via crossterm.
 ///
@@ -35,6 +39,9 @@ pub struct CrosstermBackend {
     front: Buffer,
     /// The terminal's current size, refreshed on resize.
     size: Size,
+    /// When and where the last unpaired left-press landed, for synthesising a
+    /// [`MouseKind::DoubleClick`] from a quick second press on the same cell.
+    last_left_press: Option<(Instant, Point)>,
 }
 
 impl CrosstermBackend {
@@ -59,6 +66,7 @@ impl CrosstermBackend {
         Ok(Self {
             front: Buffer::new(size),
             size,
+            last_left_press: None,
         })
     }
 
@@ -119,10 +127,46 @@ impl EventSource for CrosstermBackend {
                 self.on_resize(size)?;
                 Ok(Some(Event::Resize(size)))
             }
+            Some(Event::Mouse(mouse)) => Ok(Some(Event::Mouse(self.detect_double_click(mouse)))),
             // Unmapped events (focus, paste, key release) read as a quiet tick.
             other => Ok(other),
         }
     }
+}
+
+impl CrosstermBackend {
+    /// Promotes a left-press that closely follows another on the same cell into a
+    /// [`MouseKind::DoubleClick`] (ADR 0007). Other mouse events pass through
+    /// untouched, but any of them clears the pending press so a press, an unrelated
+    /// event, then a press is two single clicks, not a double.
+    fn detect_double_click(&mut self, mouse: MouseEvent) -> MouseEvent {
+        if mouse.kind != MouseKind::Down(MouseButton::Left) {
+            self.last_left_press = None;
+            return mouse;
+        }
+        let now = Instant::now();
+        if is_double_click(self.last_left_press, now, mouse.pos, DOUBLE_CLICK) {
+            self.last_left_press = None; // so a triple-click is a click + double, not a chain
+            MouseEvent {
+                kind: MouseKind::DoubleClick(MouseButton::Left),
+                ..mouse
+            }
+        } else {
+            self.last_left_press = Some((now, mouse.pos));
+            mouse
+        }
+    }
+}
+
+/// Whether a left-press at `pos`/`now` falls within `window` of the `previous`
+/// one on the same cell. Pure, so the timing rule is unit-tested without a TTY.
+fn is_double_click(
+    previous: Option<(Instant, Point)>,
+    now: Instant,
+    pos: Point,
+    window: Duration,
+) -> bool {
+    matches!(previous, Some((then, at)) if at == pos && now.duration_since(then) <= window)
 }
 
 impl Drop for CrosstermBackend {
@@ -367,6 +411,35 @@ mod tests {
                 modifiers: Modifiers::NONE,
             }))
         );
+    }
+
+    #[test]
+    fn double_click_is_a_quick_second_press_on_the_same_cell() {
+        let p = Point::new(3, 4);
+        let t0 = Instant::now();
+        // No prior press is never a double-click.
+        assert!(!is_double_click(None, t0, p, DOUBLE_CLICK));
+        // A quick second press on the same cell is.
+        assert!(is_double_click(
+            Some((t0, p)),
+            t0 + Duration::from_millis(120),
+            p,
+            DOUBLE_CLICK
+        ));
+        // Too slow is not.
+        assert!(!is_double_click(
+            Some((t0, p)),
+            t0 + Duration::from_millis(500),
+            p,
+            DOUBLE_CLICK
+        ));
+        // Quick but on a different cell is not.
+        assert!(!is_double_click(
+            Some((t0, p)),
+            t0 + Duration::from_millis(120),
+            Point::new(3, 5),
+            DOUBLE_CLICK
+        ));
     }
 
     #[test]

@@ -147,6 +147,11 @@ pub enum MouseButton {
 pub enum MouseKind {
     /// A button was pressed.
     Down(MouseButton),
+    /// A second press of the same button on the same cell within the double-click
+    /// interval. Synthesised by the event source from two `Down`s (ADR 0007); the
+    /// preceding `Down`/`Up` pair is still delivered, so a view that acts only on
+    /// `Down` sees an ordinary click and this is the "and activate" follow-up.
+    DoubleClick(MouseButton),
     /// A button was released.
     Up(MouseButton),
     /// The mouse moved with a button held.

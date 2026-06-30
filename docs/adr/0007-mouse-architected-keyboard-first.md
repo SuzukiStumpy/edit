@@ -24,6 +24,14 @@ drag-select) are filled in during a dedicated later phase (roadmap Phase 9).
 - Early TDD stays simple; no retrofit needed when mouse arrives (the seam exists).
 - The product is fully mouse-capable by the end, authentic to TV.
 - Until Phase 9, the app is keyboard-only — acceptable and even period-accurate.
+- **Double-click** is synthesised at the event source (the `EventSource`, where a
+  clock lives), not in widgets: a second left-press on the same cell within
+  ~400 ms becomes a `MouseKind::DoubleClick`, *in addition to* the ordinary
+  `Down`/`Up` — so a view that only reads `Down` sees a plain click and a view that
+  wants "activate" reads the follow-up. The timing predicate is pure and tested;
+  the wiring rides the live terminal. A list double-click is routed through the
+  container's existing Enter path (e.g. the file dialog opens the file / enters the
+  folder), keeping "double-click = select + Enter" true without per-widget clocks.
 
 ## Alternatives considered
 

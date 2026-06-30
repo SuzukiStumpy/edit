@@ -4,8 +4,10 @@
 //! [`InputLine`](super::InputLine) for the file name, and *Open*/*Save* +
 //! *Cancel* [`Button`](super::Button)s into a modal view (ADR 0017). `Enter` on a
 //! directory navigates into it; `Enter` on a file (or the default button) accepts
-//! the path; `Esc` cancels. After [`exec_view`](crate::app::Application::exec_view)
-//! returns `CM_OK`, [`path`](FileDialog::path) is the chosen file.
+//! the path; `Esc` cancels. A left **double-click** on a list entry does the same
+//! as `Enter` on it — open the file or step into the folder (ADR 0007). After
+//! [`exec_view`](crate::app::Application::exec_view) returns `CM_OK`,
+//! [`path`](FileDialog::path) is the chosen file.
 //!
 //! Directory listing is read through an injected closure (real `std::fs` by
 //! default), so navigation is testable without touching the filesystem.
@@ -231,7 +233,11 @@ impl FileDialog {
         let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
             return EventResult::Ignored;
         };
-        if matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
+        let pressed = matches!(
+            m.kind,
+            MouseKind::Down(MouseButton::Left) | MouseKind::DoubleClick(MouseButton::Left)
+        );
+        if pressed {
             self.focus = i;
             self.apply_focus();
         }
@@ -244,6 +250,11 @@ impl FileDialog {
             FOCUS_LIST => {
                 let result = self.list.handle_event(&local, ctx);
                 self.sync_input_from_list();
+                // A double-click on the list is "select and accept": run the same
+                // navigate-into-a-directory / open-a-file path as Enter (ADR 0007).
+                if matches!(m.kind, MouseKind::DoubleClick(MouseButton::Left)) {
+                    return self.on_enter(ctx);
+                }
                 result
             }
             FOCUS_INPUT => self.input.handle_event(&local, ctx),
@@ -448,6 +459,47 @@ mod tests {
         assert_eq!(d.focus, FOCUS_LIST);
         assert_eq!(d.list.selected(), Some(2));
         assert_eq!(d.input.text(), "a.txt", "the name field follows the click");
+    }
+
+    #[test]
+    fn double_clicking_a_file_accepts_it() {
+        let mut d = dialog(); // entries: .., sub, a.txt, b.txt
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // "a.txt" is the list's row 2 → dialog-local y = 7. Double-click = open.
+        let dc = Event::Mouse(MouseEvent {
+            kind: MouseKind::DoubleClick(MouseButton::Left),
+            pos: Point::new(3, 7),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(d.handle_event(&dc, &mut ctx), EventResult::Consumed);
+        assert_eq!(d.list.selected(), Some(2));
+        assert_eq!(d.input.text(), "a.txt");
+        assert_eq!(
+            ctx.take_posted(),
+            vec![Event::Command(CM_OK)],
+            "double-clicking a file accepts, like select + Enter"
+        );
+    }
+
+    #[test]
+    fn double_clicking_a_directory_navigates_into_it() {
+        let mut d = dialog();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        // "sub" is the list's row 1 → dialog-local y = 6.
+        let dc = Event::Mouse(MouseEvent {
+            kind: MouseKind::DoubleClick(MouseButton::Left),
+            pos: Point::new(3, 6),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(d.handle_event(&dc, &mut ctx), EventResult::Consumed);
+        assert_eq!(d.dir, PathBuf::from("/root/sub"));
+        assert_eq!(names(&d), vec!["..", "c.txt"]);
+        assert!(
+            ctx.take_posted().is_empty(),
+            "navigating into a folder accepts nothing"
+        );
     }
 
     #[test]

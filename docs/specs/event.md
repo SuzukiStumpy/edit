@@ -44,8 +44,10 @@ pub enum KeyCode { Char(char), Enter, Esc, Backspace, Tab, BackTab, Delete,
 pub struct Modifiers(u8); // SHIFT | CONTROL | ALT — a bitset like color::Attributes
 
 pub struct MouseEvent { pub kind: MouseKind, pub pos: Point, pub modifiers: Modifiers }
-pub enum MouseKind { Down(MouseButton), Up(MouseButton), Drag(MouseButton),
-                     Moved, ScrollUp, ScrollDown }
+pub enum MouseKind { Down(MouseButton), DoubleClick(MouseButton), Up(MouseButton),
+                     Drag(MouseButton), Moved, ScrollUp, ScrollDown }
+// DoubleClick is synthesised by the event source from two quick same-cell Downs
+// (ADR 0007); the first Down/Up still arrives, so it is the "and activate" follow-up.
 pub enum MouseButton { Left, Right, Middle }
 
 pub struct Command(pub u16);
