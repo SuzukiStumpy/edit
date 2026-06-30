@@ -135,26 +135,42 @@ impl EventSource for CrosstermBackend {
 }
 
 impl CrosstermBackend {
-    /// Promotes a left-press that closely follows another on the same cell into a
-    /// [`MouseKind::DoubleClick`] (ADR 0007). Other mouse events pass through
-    /// untouched, but any of them clears the pending press so a press, an unrelated
-    /// event, then a press is two single clicks, not a double.
+    /// Promotes a quick second left-press on the same cell into a
+    /// [`MouseKind::DoubleClick`] (ADR 0007).
     fn detect_double_click(&mut self, mouse: MouseEvent) -> MouseEvent {
-        if mouse.kind != MouseKind::Down(MouseButton::Left) {
-            self.last_left_press = None;
-            return mouse;
+        apply_double_click(
+            &mut self.last_left_press,
+            mouse,
+            Instant::now(),
+            DOUBLE_CLICK,
+        )
+    }
+}
+
+/// The double-click state transition. A left-press within `window` of a previous
+/// one on the same cell becomes a `DoubleClick`; every other event — crucially the
+/// `Up` *between* the two presses of a real double-click — passes through and
+/// leaves the pending press untouched, so the release in the middle does not
+/// cancel it. Only the time and position decide. Pure (the clock is injected), so
+/// the sequence is unit-tested without a TTY.
+fn apply_double_click(
+    state: &mut Option<(Instant, Point)>,
+    mouse: MouseEvent,
+    now: Instant,
+    window: Duration,
+) -> MouseEvent {
+    if mouse.kind != MouseKind::Down(MouseButton::Left) {
+        return mouse;
+    }
+    if is_double_click(*state, now, mouse.pos, window) {
+        *state = None; // a triple-click is then click + double, not a chain
+        MouseEvent {
+            kind: MouseKind::DoubleClick(MouseButton::Left),
+            ..mouse
         }
-        let now = Instant::now();
-        if is_double_click(self.last_left_press, now, mouse.pos, DOUBLE_CLICK) {
-            self.last_left_press = None; // so a triple-click is a click + double, not a chain
-            MouseEvent {
-                kind: MouseKind::DoubleClick(MouseButton::Left),
-                ..mouse
-            }
-        } else {
-            self.last_left_press = Some((now, mouse.pos));
-            mouse
-        }
+    } else {
+        *state = Some((now, mouse.pos));
+        mouse
     }
 }
 
@@ -440,6 +456,40 @@ mod tests {
             Point::new(3, 5),
             DOUBLE_CLICK
         ));
+    }
+
+    #[test]
+    fn a_press_release_press_on_the_same_cell_is_a_double_click() {
+        // The release that always falls between the two presses of a real
+        // double-click must not cancel it (the bug behind "double-click does
+        // nothing").
+        let mut state = None;
+        let t = Instant::now();
+        let p = Point::new(3, 4);
+        let ev = |kind| MouseEvent {
+            kind,
+            pos: p,
+            modifiers: Modifiers::NONE,
+        };
+        let down = MouseKind::Down(MouseButton::Left);
+        let up = MouseKind::Up(MouseButton::Left);
+
+        assert_eq!(
+            apply_double_click(&mut state, ev(down), t, DOUBLE_CLICK).kind,
+            down,
+            "first press is an ordinary click"
+        );
+        apply_double_click(&mut state, ev(up), t, DOUBLE_CLICK); // release in the middle
+        assert_eq!(
+            apply_double_click(&mut state, ev(down), t, DOUBLE_CLICK).kind,
+            MouseKind::DoubleClick(MouseButton::Left),
+            "the quick second press is promoted"
+        );
+        // A third press right after is a fresh single click, not another double.
+        assert_eq!(
+            apply_double_click(&mut state, ev(down), t, DOUBLE_CLICK).kind,
+            down
+        );
     }
 
     #[test]
