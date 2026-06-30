@@ -1,0 +1,50 @@
+# Continuous integration: test + lint on every push to main and every PR.
+# Releases live in release.yml; this workflow never builds artefacts.
+#
+# Tests run on all three target OSes so platform quirks (the Phase 10 "verify on
+# Windows and macOS" task) surface on a PR rather than at release time. fmt and
+# clippy run once on Linux — they are platform-independent.
+#
+# The toolchain is single-sourced in rust-toolchain.toml (MSRV 1.85.0, with the
+# rustfmt + clippy components): `cargo --version` in the repo root makes rustup
+# install and select it, so nothing pins the version a second time here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: cargo --version
+      - name: Test
+        run: cargo test --workspace
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (+ rustfmt, clippy)
+        run: cargo --version
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

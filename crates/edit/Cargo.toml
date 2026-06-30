@@ -1,6 +1,6 @@
 [package]
 name = "edit"
-version = "0.0.0"
+version.workspace = true                    # lockstep with the workspace (ADR 0024)
 description = "A text-mode editor in the spirit of MS-DOS EDIT, built on rvision."
 edition.workspace = true
 rust-version.workspace = true

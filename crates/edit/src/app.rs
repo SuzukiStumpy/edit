@@ -1305,28 +1305,39 @@ fn open_help<T: Backend + EventSource>(
     Ok(())
 }
 
-/// Shows the About box: name, version, and the one-line "what this is". A plain
-/// `MessageBox::ok`, which word-wraps the prose (blank lines keep the paragraphs
-/// apart). The richer Help viewer is still to come.
+/// Builds the About box's heading: `edit <version>`, with ` (<sha>)` appended
+/// when a short git commit hash was stamped in at build time. A blank `sha` — the
+/// fallback when git metadata is unavailable (see `build.rs`) — yields just the
+/// name and version. Kept pure so it is unit-testable without the build-time
+/// stamp (which would otherwise make any snapshot churn every commit).
+fn about_version_line(version: &str, sha: &str) -> String {
+    let sha = sha.trim();
+    if sha.is_empty() {
+        format!("edit {version}")
+    } else {
+        format!("edit {version} ({sha})")
+    }
+}
+
+/// Shows the About box: name, version (+ git hash when stamped), and the one-line
+/// "what this is". A plain `MessageBox::ok`, which word-wraps the prose (blank
+/// lines keep the paragraphs apart). The richer Help viewer is still to come.
 fn about<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    message(
-        app,
-        ed,
-        theme,
-        "About",
-        concat!(
-            "edit ",
-            env!("CARGO_PKG_VERSION"),
-            "\n\n\
-             A text-mode editor in the spirit of MS-DOS EDIT, built on the \
-             rvision TurboVision-style framework.\n\n\
-             A Rust learning project.",
-        ),
-    )
+    let heading = about_version_line(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("EDIT_GIT_SHA").unwrap_or(""),
+    );
+    let text = format!(
+        "{heading}\n\n\
+         A text-mode editor in the spirit of MS-DOS EDIT, built on the \
+         rvision TurboVision-style framework.\n\n\
+         A Rust learning project."
+    );
+    message(app, ed, theme, "About", &text)
 }
 
 /// Runs the Replace dialog and replaces all matches, reporting the count.
@@ -1533,6 +1544,21 @@ mod tests {
 
     fn keydown(ed: &mut EditorApp, code: KeyCode, mods: Modifiers) -> Vec<Command> {
         ed.dispatch(&Event::Key(KeyEvent::new(code, mods)), &CommandSet::new())
+    }
+
+    #[test]
+    fn about_version_line_appends_sha_when_present() {
+        assert_eq!(
+            about_version_line("0.1.0", "abc1234"),
+            "edit 0.1.0 (abc1234)"
+        );
+    }
+
+    #[test]
+    fn about_version_line_omits_sha_when_blank() {
+        // build.rs leaves the stamp empty when git metadata is unavailable.
+        assert_eq!(about_version_line("0.1.0", ""), "edit 0.1.0");
+        assert_eq!(about_version_line("0.1.0", "  "), "edit 0.1.0");
     }
 
     #[test]

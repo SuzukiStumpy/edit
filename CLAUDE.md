@@ -61,6 +61,10 @@ at the OS/terminal boundary or for Unicode data tables.
   code. Record any design decision worth keeping as a new ADR.
 - **Docs.** Rustdoc on every public item (`#![warn(missing_docs)]` is on).
   Keep the relevant ADR/roadmap entry updated when a decision or plan changes.
+- **Commits.** Conventional Commits, scoped per crate — `feat(rvision): …`,
+  `fix(edit): …`, `feat(…)!:` / a `BREAKING CHANGE:` footer for a major bump.
+  release-please reads these to compute the next version (ADR 0024); an unscoped
+  or non-conventional subject just won't drive a bump.
 
 ## Commands
 

@@ -1,0 +1,91 @@
+# Release automation (ADR 0024).
+#
+# On every push to main, release-please reads the Conventional Commits since the
+# last release and maintains an open "release PR" that bumps the workspace version
+# (both crates inherit it via `version.workspace = true`) and the changelog.
+# Merging that PR tags vX.Y.Z and cuts the GitHub Release; the gated `build` job
+# then compiles the binaries and attaches them. Routine pushes only refresh the
+# PR — they build nothing.
+#
+# The build is a downstream job in THIS workflow, gated on release-please's
+# `release_created` output, rather than a separate workflow keyed on the tag:
+# a tag/release created with the default GITHUB_TOKEN does not trigger another
+# workflow run (GitHub's recursion guard), so a same-run gated job is the reliable
+# wiring and needs no PAT.
+#
+# Bootstrap (first release only): the manifest already declares 0.1.0. To make the
+# very first cut be exactly v0.1.0, include a `Release-As: 0.1.0` footer in the body
+# of the commit that lands this file (or push an empty commit carrying that footer).
+# From then on the version is computed automatically from commit types.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
+          - { os: macos-latest,   target: x86_64-apple-darwin }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo --version` in the repo root makes rustup honour rust-toolchain.toml
+      # and install the pinned MSRV (1.85.0); the target is then added to it. This
+      # keeps the toolchain version single-sourced in rust-toolchain.toml.
+      - name: Install pinned toolchain + cross target
+        run: |
+          cargo --version
+          rustup target add "${{ matrix.target }}"
+
+      # No `--locked`: release-please bumps Cargo.toml but not Cargo.lock's member
+      # entries, so the lock is momentarily stale at the tagged commit; cargo
+      # reconciles it in place. The binary's version comes from Cargo.toml via
+      # CARGO_PKG_VERSION, so the artefact is correct regardless.
+      - name: Build
+        run: cargo build --release -p edit --target "${{ matrix.target }}"
+
+      - name: Stage binary
+        id: stage
+        run: |
+          ext=""
+          [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
+          src="target/${{ matrix.target }}/release/edit${ext}"
+          asset="edit-${{ needs.release-please.outputs.tag_name }}-${{ matrix.target }}${ext}"
+          cp "$src" "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Attach to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" "${{ steps.stage.outputs.asset }}" --clobber

@@ -426,6 +426,15 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
     windowing question in the backlog, so the framework window is built once on
     the right windowing architecture).
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
+- **Release & versioning** (ADR 0024). Conventional Commits (crate-scoped) drive
+  **release-please**, which keeps an open release PR bumping a single workspace
+  version (lockstep `edit` + `rvision`) and the changelog — no build. Merging it
+  tags `vX.Y.Z` and cuts the GitHub Release, which triggers a hand-rolled build
+  matrix (Linux x86_64, Windows x86_64, macOS arm64 + Intel x86_64) that attaches
+  binaries; the version is stamped
+  via `CARGO_PKG_VERSION` (+ optional git-SHA `build.rs`). Prep: `version.workspace
+  = true` in both crates, fill the empty `repository` field. Doubles as the
+  "verify on Windows and macOS" task above.
 
 ---
 
@@ -439,6 +448,9 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   the Backlog).
 - **Legacy encodings / gap buffer / rope** — behind their seams (decode layer,
   `TextBuffer` trait); add only if a real need appears, each via a new ADR.
+- **`rvision` versioning** — lockstep with `edit` under one workspace version now;
+  graduates to an independent semver line and its own repository when the framework
+  gains a second consumer or is published to crates.io (ADR 0024).
 
 ---
 

@@ -1,6 +1,6 @@
 [package]
 name = "rvision"
-version = "0.0.0"
+version.workspace = true                    # lockstep with the workspace (ADR 0024)
 description = "A TurboVision-style terminal UI framework, hand-built in Rust."
 edition.workspace = true
 rust-version.workspace = true

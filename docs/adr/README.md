@@ -29,5 +29,6 @@ rewriting an old one.
 | [0021](0021-system-clipboard-osc52-write-only.md) | System clipboard via OSC 52, write-only (`Backend::set_clipboard`) |
 | [0022](0022-paste-in-via-bracketed-paste.md) | Paste-in via bracketed paste (`Event::Paste`) |
 | [0023](0023-help-format-and-model.md) | Help content: lightweight markup format + block topic model |
+| [0024](0024-release-versioning-ci.md) | Release-please + lockstep workspace version; hand-rolled cross-platform build on release |
 
 New decision? Copy [`0000-template.md`](0000-template.md).
