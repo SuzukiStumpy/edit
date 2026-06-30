@@ -18,7 +18,7 @@ use rvision::buffer::Buffer;
 use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
-use rvision::command::{CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet};
+use rvision::command::{CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet};
 use rvision::event::{
     Event, EventResult, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
 };
@@ -36,6 +36,7 @@ use crate::editor::{
     EditorView,
 };
 use crate::file::{self, Encoding};
+use crate::help::{HELP_TEXT, HelpViewer};
 
 /// File ▸ New.
 pub const CM_NEW: Command = Command(CM_USER + 1);
@@ -296,13 +297,25 @@ impl EditorApp {
                         MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
                     ],
                 ),
-                Menu::new("Help", vec![MenuItem::new("About...", CM_ABOUT)]),
+                Menu::new(
+                    "Help",
+                    vec![
+                        MenuItem::new("Help Topics", CM_HELP).with_shortcut("F1"),
+                        MenuItem::new("About...", CM_ABOUT),
+                    ],
+                ),
             ],
             theme,
         );
         let status_line = StatusLine::new(
             regions(size).status,
             vec![
+                StatusItem::new(
+                    "F1",
+                    "Help",
+                    KeyEvent::new(KeyCode::F(1), Modifiers::NONE),
+                    CM_HELP,
+                ),
                 StatusItem::new(
                     "F2",
                     "Save",
@@ -1230,7 +1243,8 @@ fn handle_command<T: Backend + EventSource>(
     }
     // On an empty desktop only New/Open (and Quit) do anything; the rest need a
     // document to act on, so they quietly no-op.
-    if ed.window_count() == 0 && !matches!(command, CM_NEW | CM_OPEN | CM_QUIT | CM_ABOUT) {
+    if ed.window_count() == 0 && !matches!(command, CM_NEW | CM_OPEN | CM_QUIT | CM_ABOUT | CM_HELP)
+    {
         return Ok(());
     }
     match command {
@@ -1271,8 +1285,23 @@ fn handle_command<T: Backend + EventSource>(
         CM_TILE => ed.tile(),
         CM_CLOSE => close(app, ed, theme)?,
         CM_ABOUT => about(app, ed, theme)?,
+        CM_HELP => open_help(app, ed, theme, None)?,
         _ => {}
     }
+    Ok(())
+}
+
+/// Opens the modal help viewer at `initial` (or the home topic when `None`). The
+/// `initial` parameter is the context-sensitivity seam (ADR 0023): every caller
+/// passes `None` for now; later a dialog or control can name a relevant topic.
+fn open_help<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+    initial: Option<&str>,
+) -> io::Result<()> {
+    let mut viewer = HelpViewer::new(HELP_TEXT, initial, theme);
+    app.exec_view(&mut *ed, &mut viewer)?;
     Ok(())
 }
 
@@ -1930,12 +1959,32 @@ mod tests {
     }
 
     #[test]
-    fn the_help_menu_posts_about() {
+    fn the_help_menu_posts_help_topics_then_about() {
         let mut ed = app();
-        keydown(&mut ed, KeyCode::Char('h'), Modifiers::ALT); // open Help (About highlighted)
+        keydown(&mut ed, KeyCode::Char('h'), Modifiers::ALT); // open Help (Help Topics highlighted)
         assert!(ed.menu_is_open());
-        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: About...
-        assert_eq!(posted, vec![CM_ABOUT]);
+        // First item: Help Topics.
+        assert_eq!(
+            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
+            vec![CM_HELP]
+        );
+        // Second item: About.
+        keydown(&mut ed, KeyCode::Char('h'), Modifiers::ALT);
+        keydown(&mut ed, KeyCode::Down, Modifiers::NONE);
+        assert_eq!(
+            keydown(&mut ed, KeyCode::Enter, Modifiers::NONE),
+            vec![CM_ABOUT]
+        );
+    }
+
+    #[test]
+    fn f1_opens_help_via_the_status_line() {
+        let mut ed = app();
+        // F1 is declined by the editor and claimed by the post-process status line.
+        assert_eq!(
+            keydown(&mut ed, KeyCode::F(1), Modifiers::NONE),
+            vec![CM_HELP]
+        );
     }
 
     #[test]

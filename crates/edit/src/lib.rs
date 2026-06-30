@@ -16,6 +16,7 @@ pub mod app;
 pub mod dialogs;
 pub mod editor;
 pub mod file;
+pub mod help;
 mod history;
 pub mod search;
 pub mod text;

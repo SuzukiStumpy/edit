@@ -44,6 +44,7 @@ pub mod command;
 pub mod crossterm_backend;
 pub mod event;
 pub mod geometry;
+pub mod help;
 pub(crate) mod osc52;
 pub mod theme;
 pub mod view;

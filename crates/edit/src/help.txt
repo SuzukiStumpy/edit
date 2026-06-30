@@ -1,0 +1,79 @@
+# edit — built-in help. Hand-authored markup (ADR 0023); compiled into the
+# binary with include_str!. Topics show in the contents list in this order; the
+# first is the home topic. Keep <pre> rows within ~49 columns (the page width).
+
+@topic overview  Overview
+
+edit is a text-mode editor in the spirit of MS-DOS EDIT, built on the rvision
+TurboVision-style framework. It is a Rust learning project.
+
+Drive it from the menu bar (press Alt or F10, then the highlighted letters), the
+status line along the bottom of the screen, or the keys listed under each topic.
+
+To read help: pick a topic from the contents list on the left with the up and
+down arrows. Press Tab to move into this page and scroll it with the arrows or
+PageUp / PageDown; press Tab again to go back to the list. Press Esc to close.
+
+@topic keyboard  Keyboard & mouse
+
+Movement and editing follow the usual conventions:
+
+<pre>
+Arrows           Move the caret
+Ctrl+Left/Right  Word left / right
+Home / End       Start / end of line
+Ctrl+Home / End  Start / end of file
+PgUp / PgDn      Scroll a screenful
+Backspace / Del  Delete left / right
+Enter            Split the line
+Tab              Insert a tab stop
+</pre>
+
+Hold Shift with any movement key to extend the selection. The mouse works too:
+click to place the caret, drag to select a range, and roll the wheel to scroll.
+
+@topic clipboard  Clipboard
+
+edit keeps two clipboards, which catches people out the first time.
+
+<pre>
+Ctrl+C / Ctrl+X  Copy / Cut
+Ctrl+V           Paste the editor clipboard
+Ctrl+Shift+V     Paste from another program
+</pre>
+
+Cut and Copy place text on edit's own internal clipboard, and also mirror it to
+the system clipboard, so you can paste it into other programs — even over SSH.
+
+A terminal program cannot read the system clipboard itself. So Ctrl+V pastes the
+internal clipboard only; to paste text you copied in another program, use your
+terminal's own paste, usually Ctrl+Shift+V. The first time you do, edit remembers
+that text as well, so a later Ctrl+V repeats it.
+
+@topic files  Files
+
+<pre>
+F2     Save
+Alt+X  Exit
+</pre>
+
+New and Open live on the File menu. Open has no shortcut key, so it never clashes
+with Find Next (F3); opening a file makes a new window. Save As is on the File
+menu too.
+
+edit preserves what it loads. The character encoding, the line-ending style (LF,
+CR, or CRLF), and a trailing final newline are all written back unchanged, so
+saving a file never quietly reformats it.
+
+@topic find  Find & Replace
+
+<pre>
+Ctrl+F   Find
+F3       Find Next (repeat the search)
+Ctrl+G   Go to Line
+</pre>
+
+Find searches forward from the caret; the dialog's options cover case
+sensitivity, whole words, and search direction. F3 repeats the last search.
+Replace, on the Search menu, rewrites every match in a single step and then tells
+you how many it changed.

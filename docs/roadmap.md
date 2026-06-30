@@ -400,12 +400,31 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   `MessageBox` now wraps to a 50-column max, so callers pass paragraphs; pre-split
   short lines (ADR 0022) are untouched since hard breaks survive. About box and the
   empty-clipboard Paste hint now pass prose.
-- Help system:
+- Help system (design grilled; spec in `docs/specs/help.md`):
   - *About box ✅* — Help ▸ About (Alt-H) shows a plain `MessageBox::ok` with the
     name, `CARGO_PKG_VERSION`, and the one-line "what this is". `CM_ABOUT` is in
-    the `handle_command` allowlist, so it works on an empty desktop.
-  - *Still to come:* a simplified viewer + content. **TODO:** document the Ctrl+V
-    (internal) vs Ctrl+Shift+V (system) paste convention there (ADR 0021/0022).
+    the `handle_command` allowlist, so it works on an empty desktop. It **stays**
+    a separate box; the viewer is for how-to content, not credits.
+  - *Topic-list viewer + content.* A *topic list + scrollable page* viewer (not
+    full hypertext — that is its own later phase). Shared in `rvision`: a
+    lightweight hand-authored **markup format** (`@topic`, blank-line paragraphs,
+    `<pre>` verbatim blocks, reserved `{label|target}` links, `#` comments), a
+    total **parser** into `HelpContents`/`HelpTopic { id, title, Vec<Block> }`
+    (`Block = Paragraph(String) | Preformatted(Vec<String>)`), a reusable
+    **`HelpPane`** page renderer (reflows prose via `wrap`, keeps `<pre>`
+    verbatim, conditional scroll bar), and a framework-standard **`CM_HELP`**.
+    `edit` supplies the content (`include_str!`'d) and a **modal** two-pane viewer
+    (contents `ListBox` + `HelpPane`, live-update on selection) run via
+    `exec_view` (ADR 0017/0018), opened by F1 / a new Help ▸ Help Topics item via
+    `open_help(initial: Option<&str>)` — the context-sensitivity seam (`None` =
+    home for now). v1 topics: Overview, Keyboard & mouse, Clipboard (documents the
+    Ctrl+V internal vs Ctrl+Shift+V system convention, ADR 0021/0022), Files,
+    Find & Replace.
+  - *Deferred to their own work:* **full hypertext** (followable links — the
+    format already reserves the syntax); the **`rvision` default `HelpWindow`**
+    desktop-window container and **context-sensitive** topics (both wait on the
+    windowing question in the backlog, so the framework window is built once on
+    the right windowing architecture).
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
 
 ---
@@ -414,8 +433,10 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 
 - **System clipboard** — internal → OSC 52 ✅ write-only (Phase 7 / 10, ADR 0021).
 - **Settings format** — hand-rolled key-value (Phase 10).
-- **Help system** — TV's hypertext help is large; ship a simplified viewer
-  (Phase 10).
+- **Help system** — TV's hypertext help is large; ship a simplified *topic-list*
+  viewer first (Phase 10, `docs/specs/help.md`). Full hypertext and a non-modal
+  desktop help window are deferred (the latter waits on the windowing question in
+  the Backlog).
 - **Legacy encodings / gap buffer / rope** — behind their seams (decode layer,
   `TextBuffer` trait); add only if a real need appears, each via a new ADR.
 
@@ -437,3 +458,16 @@ ordered by how much shared machinery they need.
   context (editor vs. chrome). Reuses the `Menu` overlay and its open/closed/modal
   state machine; the trigger becomes a right-press hit-test rather than the menu
   bar. Best explored *after* submenus — they share the nesting/anchoring machinery.
+- **Editor windowing vs. framework windowing** *(needs its own grilling)*. `edit`
+  owns its documents and chrome **concretely** (`Vec<Document>`, bespoke MDI, drag,
+  resize, modal driver — ADR 0018) instead of using `rvision`'s `Desktop`/`Window`,
+  because those wrap `Box<dyn View>` and acting on the concrete document behind one
+  would force a downcast or `Rc<RefCell>` (ADR 0003). Each step was locally
+  reasonable, but the result is **two windowing implementations**, and the
+  framework's has atrophied — no dynamic open/close, no drag in the widget, no F1
+  wiring in `Shell`. The help system was the first feature to want a mature
+  framework window (a non-modal `THelpWindow`) and tripped over the gap, which is
+  why its `rvision` `HelpWindow` container is deferred. The question — converge the
+  two (and how: IDs + a registry? a window-kind enum? generics over the interior?),
+  or accept the split deliberately — touches ADRs 0003, 0009, 0016, 0018 and the
+  `Shell` design, so it deserves a dedicated grilling before any code.

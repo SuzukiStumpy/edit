@@ -56,6 +56,16 @@ impl ListBox {
             .map(String::as_str)
     }
 
+    /// Selects item `index` (clamped to the last item), scrolling it into view.
+    /// A no-op on an empty list.
+    pub fn select(&mut self, index: usize) {
+        if self.items.is_empty() {
+            return;
+        }
+        self.selected = Some(index.min(self.items.len() - 1));
+        self.ensure_visible();
+    }
+
     /// The number of fully visible rows.
     fn rows(&self) -> usize {
         self.bounds.height().max(0) as usize
@@ -325,6 +335,19 @@ mod tests {
         let mut canvas = Canvas::new(&mut buf);
         lb.draw(&mut canvas);
         buf.to_text()
+    }
+
+    #[test]
+    fn select_sets_the_index_clamped_and_scrolls_into_view() {
+        let mut lb = list(6, 3, &["a", "b", "c", "d", "e", "f"]);
+        lb.select(4);
+        assert_eq!(lb.selected(), Some(4));
+        assert!(lb.top > 0, "scrolled to keep item 4 visible");
+        lb.select(99); // clamps to the last
+        assert_eq!(lb.selected(), Some(5));
+        let mut empty = ListBox::new(rect(6, 3), vec![], &Theme::default());
+        empty.select(2); // no panic, still nothing selected
+        assert_eq!(empty.selected(), None);
     }
 
     #[test]

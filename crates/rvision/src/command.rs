@@ -20,6 +20,9 @@ pub const CM_CANCEL: Command = Command(3);
 pub const CM_YES: Command = Command(4);
 /// Negative answer to a confirmation (TurboVision's `cmNo`).
 pub const CM_NO: Command = Command(5);
+/// Open the help viewer (TurboVision's `cmHelp`). The framework standardises the
+/// id so the `Shell` and a bespoke app driver (e.g. the editor's) can share it.
+pub const CM_HELP: Command = Command(6);
 
 /// The first command id reserved for the **application**.
 ///
@@ -103,7 +106,7 @@ mod tests {
 
     #[test]
     fn standard_ids_are_distinct_and_non_zero() {
-        let ids = [CM_QUIT, CM_OK, CM_CANCEL, CM_YES, CM_NO];
+        let ids = [CM_QUIT, CM_OK, CM_CANCEL, CM_YES, CM_NO, CM_HELP];
         for id in ids {
             assert_ne!(id.0, 0, "id 0 is reserved for 'no command'");
         }
@@ -121,7 +124,7 @@ mod tests {
     fn standard_commands_sit_below_the_application_range() {
         // The framework's own commands live below CM_USER; apps number from there
         // up, so the two namespaces never collide (ADR 0003).
-        for id in [CM_QUIT, CM_OK, CM_CANCEL, CM_YES, CM_NO] {
+        for id in [CM_QUIT, CM_OK, CM_CANCEL, CM_YES, CM_NO, CM_HELP] {
             assert!(id.0 < CM_USER, "{id:?} must be a framework-reserved id");
         }
     }
