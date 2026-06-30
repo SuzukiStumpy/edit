@@ -1,4 +1,4 @@
-//! The editor's own modal dialogs (Go to Line, Find, Replace).
+//! The editor's own modal dialogs (Go to Line, Find, Replace, Settings).
 //!
 //! These are editor concepts, so they live in the `edit` crate rather than in the
 //! editor-agnostic `rvision` framework, but they are composed from generic
@@ -11,7 +11,9 @@
 mod find;
 mod go_to_line;
 mod replace;
+mod settings;
 
 pub use find::FindDialog;
 pub use go_to_line::GoToLine;
 pub use replace::ReplaceDialog;
+pub use settings::{CM_DEFAULTS, SettingsDialog};

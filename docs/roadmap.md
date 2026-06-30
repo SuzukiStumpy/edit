@@ -394,7 +394,19 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   routed to the focused editor or input line (ADR 0022). *Least surprise:* a
   bracketed paste mirrors into the internal clipboard (so a later Ctrl-V repeats
   it), and an empty-clipboard Paste hints at Ctrl+Shift+V.
-- Settings persistence (hand-rolled key-value format — no serde).
+- **Settings persistence ✅** — a hand-rolled `key = value` config file (no serde,
+  no `dirs` crate) under the platform config dir (`$XDG_CONFIG_HOME`/`%APPDATA%`/
+  macOS `Application Support`, resolved from env by hand), parsed leniently so a
+  bad/old/hand-edited file never blocks startup. v1 persists the **tab width**, the
+  **Find/Replace** case + whole-word options (the dialog reopens as last left), and
+  a **recent-files** MRU (configurable length) spliced into the File menu (opens in
+  a new window; a stale entry self-drops). An **Edit ▸ Settings** dialog edits the
+  tab width and MRU length, with a **Reset to defaults** that also clears the
+  transparent prefs (keeping the recent history). `edit::settings` owns the format
+  + per-OS path (both pure and unit-tested via injected env / temp dirs;
+  `$EDIT_CONFIG_PATH` overrides the path); `EditorApp` loads at startup and saves on
+  change (ADR 0025). Module spec: `docs/specs/settings.md`. Window-layout
+  persistence was scoped out of v1.
 - *Word-wrap helper ✅* — `rvision::wrap::wrap(text, width)` breaks prose to a max
   display width on spaces, preserving hard `'\n'` breaks (spec `docs/specs/wrap.md`).
   `MessageBox` now wraps to a 50-column max, so callers pass paragraphs; pre-split
@@ -441,7 +453,7 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 ## Deferred decisions (settled when their phase arrives)
 
 - **System clipboard** — internal → OSC 52 ✅ write-only (Phase 7 / 10, ADR 0021).
-- **Settings format** — hand-rolled key-value (Phase 10).
+- **Settings format** — hand-rolled key-value ✅ (Phase 10, ADR 0025).
 - **Help system** — TV's hypertext help is large; ship a simplified *topic-list*
   viewer first (Phase 10, `docs/specs/help.md`). Full hypertext and a non-modal
   desktop help window are deferred (the latter waits on the windowing question in

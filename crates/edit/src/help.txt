@@ -59,7 +59,9 @@ Alt+X  Exit
 
 New and Open live on the File menu. Open has no shortcut key, so it never clashes
 with Find Next (F3); opening a file makes a new window. Save As is on the File
-menu too.
+menu too. The most recently opened or saved files are listed near the bottom of
+the File menu; pick one to reopen it in a new window. See Settings for where that
+list is kept.
 
 edit preserves what it loads. The character encoding, the line-ending style (LF,
 CR, or CRLF), and a trailing final newline are all written back unchanged, so
@@ -76,4 +78,26 @@ Ctrl+G   Go to Line
 Find searches forward from the caret; the dialog's options cover case
 sensitivity, whole words, and search direction. F3 repeats the last search.
 Replace, on the Search menu, rewrites every match in a single step and then tells
-you how many it changed.
+you how many it changed. The case and whole-word choices are remembered between
+sessions (see Settings), so the dialog reopens the way you last left it.
+
+@topic settings  Settings
+
+Edit ▸ Settings opens a dialog for the tab width and how many recent files the
+File menu shows. Reset to defaults restores every preference — including the ones
+with no dialog of their own, like the Find options — to its factory value; your
+recent-files history is kept.
+
+The choices persist between sessions in a small text file you can also edit by
+hand. It is written automatically when a setting changes; deleting it restores the
+defaults. The file lives in the usual place for your system:
+
+<pre>
+Linux/BSD   $XDG_CONFIG_HOME/edit/config   (or ~/.config/edit/config)
+macOS       ~/Library/Application Support/edit/config
+Windows     %APPDATA%\edit\config
+</pre>
+
+It holds the tab width (tab_width), the recent-files length (recent_limit), the
+Find case-sensitive and whole-word options, and the recent-files list itself.
+Setting EDIT_CONFIG_PATH points edit at a different file.

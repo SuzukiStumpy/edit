@@ -108,6 +108,18 @@ impl EditorView {
         self
     }
 
+    /// Sets the tab-stop width (in columns) used for display and vertical motion.
+    /// Seeded from the persisted settings when a document is created (ADR 0025);
+    /// guarded to at least 1 so the display geometry can never divide by zero.
+    pub fn set_tab_width(&mut self, width: usize) {
+        self.tab_width = width.max(1);
+    }
+
+    /// The current tab-stop width.
+    pub fn tab_width(&self) -> usize {
+        self.tab_width
+    }
+
     /// Replaces the document with `text`, resetting the cursor, scroll, selection
     /// and dirty flag (as on opening a freshly loaded file).
     pub fn set_text(&mut self, text: &str) {

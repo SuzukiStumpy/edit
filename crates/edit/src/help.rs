@@ -402,7 +402,17 @@ Ctrl+V pastes the editor clipboard.";
     fn shipped_content_parses_with_the_expected_topics() {
         let c = HelpContents::parse(HELP_TEXT);
         let ids: Vec<&str> = c.topics().iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["overview", "keyboard", "clipboard", "files", "find"]);
+        assert_eq!(
+            ids,
+            [
+                "overview",
+                "keyboard",
+                "clipboard",
+                "files",
+                "find",
+                "settings"
+            ]
+        );
     }
 
     #[test]

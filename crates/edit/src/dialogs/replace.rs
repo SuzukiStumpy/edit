@@ -59,6 +59,14 @@ impl ReplaceDialog {
         dialog
     }
 
+    /// Builder: seed the case / whole-word checkboxes from the saved Find options
+    /// so the dialog reopens the way the user last left it (ADR 0025).
+    pub fn with_options(mut self, case_sensitive: bool, whole_word: bool) -> Self {
+        self.case.set_checked(case_sensitive);
+        self.word.set_checked(whole_word);
+        self
+    }
+
     /// The search query built from the find field and the case/whole-word options.
     pub fn query(&self) -> Query {
         Query {
@@ -265,6 +273,15 @@ mod tests {
         });
         assert_eq!(d.handle_event(&click, &mut ctx), EventResult::Consumed);
         assert_eq!(d.focus, FOCUS_REPLACE);
+    }
+
+    #[test]
+    fn with_options_seeds_the_checkboxes() {
+        let q = ReplaceDialog::new(&Theme::default())
+            .with_options(true, true)
+            .query();
+        assert!(q.case_sensitive);
+        assert!(q.whole_word);
     }
 
     #[test]

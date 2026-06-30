@@ -30,13 +30,14 @@ use rvision::widgets::{
     StatusItem, StatusLine,
 };
 
-use crate::dialogs::{FindDialog, GoToLine, ReplaceDialog};
+use crate::dialogs::{CM_DEFAULTS, FindDialog, GoToLine, ReplaceDialog, SettingsDialog};
 use crate::editor::{
     CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_REPLACE, CM_UNDO,
     EditorView,
 };
 use crate::file::{self, Encoding};
 use crate::help::{HELP_TEXT, HelpViewer};
+use crate::settings::{MAX_RECENT, Settings};
 
 /// File ▸ New.
 pub const CM_NEW: Command = Command(CM_USER + 1);
@@ -64,6 +65,24 @@ pub const CM_ZOOM: Command = Command(CM_USER + 35);
 /// Help ▸ About — show the About box. Works on an empty desktop (needs no
 /// document), so it sits in the [`handle_command`] allowlist alongside New/Open.
 pub const CM_ABOUT: Command = Command(CM_USER + 40);
+
+/// Edit ▸ Settings — open the Settings dialog. Needs no document, so it is in the
+/// empty-desktop allowlist too.
+pub const CM_SETTINGS: Command = Command(CM_USER + 41);
+
+/// First of the File menu's recent-files commands (ADR 0025). The `k`-th entry
+/// posts `Command(CM_RECENT_BASE.0 + k)`; the block spans [`MAX_RECENT`] ids,
+/// disjoint from every other command space above.
+pub const CM_RECENT_BASE: Command = Command(CM_USER + 50);
+
+/// The MRU index a recent-files command refers to, or `None` if it is not one.
+fn recent_index(command: Command) -> Option<usize> {
+    let base = CM_RECENT_BASE.0;
+    let id = command.0;
+    (base..base + MAX_RECENT as u16)
+        .contains(&id)
+        .then(|| (id - base) as usize)
+}
 
 /// One open document: its editor view, the file's path, and the [`Encoding`] to
 /// preserve on save (ADR 0010). `EditorApp` owns a `Vec<Document>` for MDI
@@ -139,6 +158,9 @@ pub struct EditorApp {
     size: Size,
     /// The internal clipboard for Cut/Copy/Paste (ADR 0019; OSC 52 is Phase 10).
     clipboard: String,
+    /// Persisted preferences: tab width, Find options, and the recent-files MRU
+    /// (ADR 0025). Loaded at startup and saved back when one of them changes.
+    settings: Settings,
     finished: bool,
     /// An in-progress drag of the active window's chrome (Phase 9d), or `None`.
     drag: Option<Drag>,
@@ -250,63 +272,89 @@ fn cascade_slot(desktop: Size, i: usize) -> Rect {
     )
 }
 
+/// The command posted by the `index`-th recent-files menu entry.
+fn recent_command(index: usize) -> Command {
+    Command(CM_RECENT_BASE.0 + index as u16)
+}
+
+/// The File-menu label for the `index`-th recent file: a 1-based number and the
+/// file's name (falling back to the whole path when it has no final component).
+fn recent_label(index: usize, path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    format!("{} {}", index + 1, name)
+}
+
+/// Builds the menu bar for a terminal of `size`, splicing the `recent` files
+/// (newest first) into the File menu between "Save As..." and "Exit". Rebuilt
+/// from scratch whenever the MRU changes, since `MenuBar` has no post-build
+/// mutation API and the menus are cheap, plain data.
+fn build_menu_bar(size: Size, theme: &Theme, recent: &[PathBuf]) -> MenuBar {
+    let mut file = vec![
+        MenuItem::new("New", CM_NEW),
+        MenuItem::new("Open...", CM_OPEN),
+        MenuItem::new("Save", CM_SAVE).with_shortcut("F2"),
+        MenuItem::new("Save As...", CM_SAVE_AS),
+    ];
+    for (i, path) in recent.iter().take(MAX_RECENT).enumerate() {
+        file.push(MenuItem::new(&recent_label(i, path), recent_command(i)));
+    }
+    file.push(MenuItem::new("Exit", CM_QUIT).with_shortcut("Alt-X"));
+
+    MenuBar::new(
+        regions(size).menu,
+        vec![
+            Menu::new("File", file),
+            Menu::new(
+                "Edit",
+                vec![
+                    MenuItem::new("Undo", CM_UNDO).with_shortcut("Ctrl-Z"),
+                    MenuItem::new("Redo", CM_REDO).with_shortcut("Ctrl-Y"),
+                    MenuItem::new("Cut", CM_CUT).with_shortcut("Ctrl-X"),
+                    MenuItem::new("Copy", CM_COPY).with_shortcut("Ctrl-C"),
+                    MenuItem::new("Paste", CM_PASTE).with_shortcut("Ctrl-V"),
+                    MenuItem::new("Settings...", CM_SETTINGS),
+                ],
+            ),
+            Menu::new(
+                "Search",
+                vec![
+                    MenuItem::new("Find...", CM_FIND).with_shortcut("Ctrl-F"),
+                    MenuItem::new("Find Next", CM_FIND_NEXT).with_shortcut("F3"),
+                    MenuItem::new("Replace...", CM_REPLACE),
+                    MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G"),
+                ],
+            ),
+            Menu::new(
+                "Window",
+                vec![
+                    MenuItem::new("Next", CM_NEXT_WINDOW).with_shortcut("F6"),
+                    MenuItem::new("Previous", CM_PREV_WINDOW).with_shortcut("Shift-F6"),
+                    MenuItem::new("Zoom", CM_ZOOM).with_shortcut("F5"),
+                    MenuItem::new("Cascade", CM_CASCADE),
+                    MenuItem::new("Tile", CM_TILE),
+                    MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
+                ],
+            ),
+            Menu::new(
+                "Help",
+                vec![
+                    MenuItem::new("Help Topics", CM_HELP).with_shortcut("F1"),
+                    MenuItem::new("About...", CM_ABOUT),
+                ],
+            ),
+        ],
+        theme,
+    )
+}
+
 impl EditorApp {
     /// Builds the editor application for a terminal of `size` with an empty,
     /// unsaved document.
     pub fn new(size: Size, theme: &Theme) -> Self {
-        let menu_bar = MenuBar::new(
-            regions(size).menu,
-            vec![
-                Menu::new(
-                    "File",
-                    vec![
-                        MenuItem::new("New", CM_NEW),
-                        MenuItem::new("Open...", CM_OPEN),
-                        MenuItem::new("Save", CM_SAVE).with_shortcut("F2"),
-                        MenuItem::new("Save As...", CM_SAVE_AS),
-                        MenuItem::new("Exit", CM_QUIT).with_shortcut("Alt-X"),
-                    ],
-                ),
-                Menu::new(
-                    "Edit",
-                    vec![
-                        MenuItem::new("Undo", CM_UNDO).with_shortcut("Ctrl-Z"),
-                        MenuItem::new("Redo", CM_REDO).with_shortcut("Ctrl-Y"),
-                        MenuItem::new("Cut", CM_CUT).with_shortcut("Ctrl-X"),
-                        MenuItem::new("Copy", CM_COPY).with_shortcut("Ctrl-C"),
-                        MenuItem::new("Paste", CM_PASTE).with_shortcut("Ctrl-V"),
-                    ],
-                ),
-                Menu::new(
-                    "Search",
-                    vec![
-                        MenuItem::new("Find...", CM_FIND).with_shortcut("Ctrl-F"),
-                        MenuItem::new("Find Next", CM_FIND_NEXT).with_shortcut("F3"),
-                        MenuItem::new("Replace...", CM_REPLACE),
-                        MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G"),
-                    ],
-                ),
-                Menu::new(
-                    "Window",
-                    vec![
-                        MenuItem::new("Next", CM_NEXT_WINDOW).with_shortcut("F6"),
-                        MenuItem::new("Previous", CM_PREV_WINDOW).with_shortcut("Shift-F6"),
-                        MenuItem::new("Zoom", CM_ZOOM).with_shortcut("F5"),
-                        MenuItem::new("Cascade", CM_CASCADE),
-                        MenuItem::new("Tile", CM_TILE),
-                        MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
-                    ],
-                ),
-                Menu::new(
-                    "Help",
-                    vec![
-                        MenuItem::new("Help Topics", CM_HELP).with_shortcut("F1"),
-                        MenuItem::new("About...", CM_ABOUT),
-                    ],
-                ),
-            ],
-            theme,
-        );
+        let menu_bar = build_menu_bar(size, theme, &[]);
         let status_line = StatusLine::new(
             regions(size).status,
             vec![
@@ -342,6 +390,7 @@ impl EditorApp {
             zoomed: true,
             size,
             clipboard: String::new(),
+            settings: Settings::default(),
             finished: false,
             drag: None,
             selecting: false,
@@ -353,6 +402,95 @@ impl EditorApp {
         };
         app.add_document(Document::new(theme));
         app
+    }
+
+    /// Adopts the persisted `settings`: re-applies the tab width to existing
+    /// documents and rebuilds the File menu's recent-files list. Call once at
+    /// startup, after [`Settings::load`] (ADR 0025).
+    pub fn apply_settings(&mut self, settings: Settings, theme: &Theme) {
+        self.settings = settings;
+        for doc in &mut self.documents {
+            doc.editor.set_tab_width(self.settings.tab_width);
+        }
+        self.menu_bar = build_menu_bar(self.size, theme, &self.settings.recent);
+    }
+
+    /// The persisted preferences (e.g. to seed a dialog from the saved Find options).
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    /// Records the active document's path at the front of the recent-files list,
+    /// rebuilds the File menu, and persists the settings. A no-op for an unsaved
+    /// (pathless) document.
+    pub fn note_recent(&mut self, theme: &Theme) {
+        let Some(path) = self.documents.get(self.active).and_then(|d| d.path.clone()) else {
+            return;
+        };
+        self.settings.record_recent(path);
+        self.menu_bar = build_menu_bar(self.size, theme, &self.settings.recent);
+        let _ = self.settings.save();
+    }
+
+    /// Persists changed Find options (case / whole-word) so the next Find or
+    /// Replace dialog opens the way the user last left it. No menu rebuild — the
+    /// options don't appear there.
+    fn remember_find_options(&mut self, case_sensitive: bool, whole_word: bool) {
+        if case_sensitive != self.settings.find_case_sensitive
+            || whole_word != self.settings.find_whole_word
+        {
+            self.settings.find_case_sensitive = case_sensitive;
+            self.settings.find_whole_word = whole_word;
+            let _ = self.settings.save();
+        }
+    }
+
+    /// The recent file at `index`, if the list still has one there.
+    fn recent_path(&self, index: usize) -> Option<PathBuf> {
+        self.settings.recent.get(index).cloned()
+    }
+
+    /// Drops a recent path that failed to open (it was deleted or moved),
+    /// rebuilds the File menu, and persists.
+    fn forget_recent(&mut self, path: &Path, theme: &Theme) {
+        self.settings.recent.retain(|p| p != path);
+        self.menu_bar = build_menu_bar(self.size, theme, &self.settings.recent);
+        let _ = self.settings.save();
+    }
+
+    /// Re-applies the tab width to every open document, rebuilds the File menu (the
+    /// recent list may have been re-capped), and persists the settings — the shared
+    /// tail of the Settings-dialog actions.
+    fn refresh_after_settings_change(&mut self, theme: &Theme) {
+        for doc in &mut self.documents {
+            doc.editor.set_tab_width(self.settings.tab_width);
+        }
+        self.menu_bar = build_menu_bar(self.size, theme, &self.settings.recent);
+        let _ = self.settings.save();
+    }
+
+    /// Applies the Settings dialog's values — each `None` keeps the current value
+    /// (an empty or non-numeric field) — then refreshes and persists.
+    pub fn apply_settings_from_dialog(
+        &mut self,
+        tab_width: Option<usize>,
+        recent_limit: Option<usize>,
+        theme: &Theme,
+    ) {
+        if let Some(width) = tab_width {
+            self.settings.set_tab_width(width);
+        }
+        if let Some(limit) = recent_limit {
+            self.settings.set_recent_limit(limit);
+        }
+        self.refresh_after_settings_change(theme);
+    }
+
+    /// Resets every preference to its default (keeping the recent-files history),
+    /// then refreshes and persists — the dialog's "Reset to defaults" (ADR 0025).
+    pub fn reset_settings_to_defaults(&mut self, theme: &Theme) {
+        self.settings.reset_keeping_recent();
+        self.refresh_after_settings_change(theme);
     }
 
     /// Repositions the chrome and the editors for a terminal of `size`, clamping
@@ -693,6 +831,9 @@ impl EditorApp {
     /// Pushes `doc` as a new window on top and makes it active, giving it a fresh
     /// cascade slot and re-syncing editor bounds.
     fn add_document(&mut self, mut doc: Document) {
+        // Every new document inherits the persisted tab width (ADR 0025); this is
+        // the single choke point for the initial document, File ▸ New, and Open.
+        doc.editor.set_tab_width(self.settings.tab_width);
         doc.normal = cascade_slot(self.desktop().size(), self.documents.len());
         self.documents.push(doc);
         self.active = self.documents.len() - 1;
@@ -1241,11 +1382,20 @@ fn handle_command<T: Backend + EventSource>(
         }
         return Ok(());
     }
-    // On an empty desktop only New/Open (and Quit) do anything; the rest need a
-    // document to act on, so they quietly no-op.
-    if ed.window_count() == 0 && !matches!(command, CM_NEW | CM_OPEN | CM_QUIT | CM_ABOUT | CM_HELP)
+    // On an empty desktop only New/Open, opening a recent file, and Quit do
+    // anything; the rest need a document to act on, so they quietly no-op.
+    if ed.window_count() == 0
+        && !matches!(
+            command,
+            CM_NEW | CM_OPEN | CM_QUIT | CM_ABOUT | CM_HELP | CM_SETTINGS
+        )
+        && recent_index(command).is_none()
     {
         return Ok(());
+    }
+    // A File-menu recent entry opens that file in a new window (ADR 0025).
+    if let Some(index) = recent_index(command) {
+        return open_recent(app, ed, theme, index);
     }
     match command {
         // Undo/redo from the Edit menu route straight back to the editor (the keys
@@ -1285,6 +1435,7 @@ fn handle_command<T: Backend + EventSource>(
         CM_TILE => ed.tile(),
         CM_CLOSE => close(app, ed, theme)?,
         CM_ABOUT => about(app, ed, theme)?,
+        CM_SETTINGS => open_settings(app, ed, theme)?,
         CM_HELP => open_help(app, ed, theme, None)?,
         _ => {}
     }
@@ -1340,17 +1491,37 @@ fn about<T: Backend + EventSource>(
     message(app, ed, theme, "About", &text)
 }
 
+/// Runs the Settings dialog (Edit ▸ Settings), applying the edited values on OK or
+/// restoring defaults on "Reset to defaults" (ADR 0025).
+fn open_settings<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+) -> io::Result<()> {
+    let mut dialog = SettingsDialog::new(theme, ed.settings());
+    match app.exec_view(&mut *ed, &mut dialog)? {
+        CM_OK => ed.apply_settings_from_dialog(dialog.tab_width(), dialog.recent_limit(), theme),
+        CM_DEFAULTS => ed.reset_settings_to_defaults(theme),
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Runs the Replace dialog and replaces all matches, reporting the count.
 fn replace<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = ReplaceDialog::new(theme);
+    let mut dialog = ReplaceDialog::new(theme).with_options(
+        ed.settings().find_case_sensitive,
+        ed.settings().find_whole_word,
+    );
     if app.exec_view(&mut *ed, &mut dialog)? != CM_OK {
         return Ok(());
     }
     let query = dialog.query();
+    ed.remember_find_options(query.case_sensitive, query.whole_word);
     if query.needle.is_empty() {
         return Ok(());
     }
@@ -1371,9 +1542,13 @@ fn find<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = FindDialog::new(theme);
+    let mut dialog = FindDialog::new(theme).with_options(
+        ed.settings().find_case_sensitive,
+        ed.settings().find_whole_word,
+    );
     if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
         let query = dialog.query();
+        ed.remember_find_options(query.case_sensitive, query.whole_word);
         if !query.needle.is_empty() {
             ed.active_editor_mut().find(query, dialog.backward());
         }
@@ -1460,18 +1635,66 @@ fn open<T: Backend + EventSource>(
     let path = dialog.path();
     ed.new_window(theme);
     match ed.open_file(path) {
-        Ok(true) => message(
-            app,
-            ed,
-            theme,
-            "Open",
-            "File was not valid UTF-8; loaded lossily.",
-        ),
-        Ok(false) => Ok(()),
+        Ok(lossy) => {
+            ed.note_recent(theme);
+            if lossy {
+                message(
+                    app,
+                    ed,
+                    theme,
+                    "Open",
+                    "File was not valid UTF-8; loaded lossily.",
+                )
+            } else {
+                Ok(())
+            }
+        }
         Err(err) => {
             // The load failed: drop the empty window we just opened for it.
             ed.remove_active_window();
             message(app, ed, theme, "Open failed", &err.to_string())
+        }
+    }
+}
+
+/// Opens the `index`-th recent file in a new window (a File-menu recent entry,
+/// ADR 0025), like [`open`] but with the path taken from the MRU rather than a
+/// dialog. A path that no longer opens is dropped from the list with a note.
+fn open_recent<T: Backend + EventSource>(
+    app: &mut Application<T>,
+    ed: &mut EditorApp,
+    theme: &Theme,
+    index: usize,
+) -> io::Result<()> {
+    let Some(path) = ed.recent_path(index) else {
+        return Ok(());
+    };
+    ed.new_window(theme);
+    match ed.open_file(path.clone()) {
+        Ok(lossy) => {
+            ed.note_recent(theme);
+            if lossy {
+                message(
+                    app,
+                    ed,
+                    theme,
+                    "Open",
+                    "File was not valid UTF-8; loaded lossily.",
+                )
+            } else {
+                Ok(())
+            }
+        }
+        Err(err) => {
+            ed.remove_active_window();
+            ed.forget_recent(&path, theme);
+            message(
+                app,
+                ed,
+                theme,
+                "Open failed",
+                &format!("{}\n\n{}", path.display(), err),
+            )
         }
     }
 }
@@ -1513,7 +1736,10 @@ fn write_to<T: Backend + EventSource>(
     path: PathBuf,
 ) -> io::Result<bool> {
     match ed.save_to(path) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            ed.note_recent(theme);
+            Ok(true)
+        }
         Err(err) => {
             message(app, ed, theme, "Save failed", &err.to_string())?;
             Ok(false)
@@ -1593,6 +1819,74 @@ mod tests {
         keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File (New highlighted)
         let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
         assert_eq!(posted, vec![CM_NEW]);
+    }
+
+    // --- settings persistence wiring (ADR 0025) ---
+
+    #[test]
+    fn recent_command_ids_round_trip_through_recent_index() {
+        for i in 0..MAX_RECENT {
+            assert_eq!(recent_index(recent_command(i)), Some(i));
+        }
+        // Neighbours of the block are not recent commands.
+        assert_eq!(recent_index(CM_OPEN), None);
+        assert_eq!(
+            recent_index(Command(CM_RECENT_BASE.0 + MAX_RECENT as u16)),
+            None
+        );
+    }
+
+    #[test]
+    fn applied_settings_seed_tab_width_for_existing_and_new_documents() {
+        let mut ed = app();
+        let mut settings = Settings::default();
+        settings.set_tab_width(3);
+        ed.apply_settings(settings, &Theme::default());
+        // The document that already existed picks up the new width...
+        assert_eq!(ed.active_editor().tab_width(), 3);
+        // ...and so does a freshly spawned one (the add_document choke point).
+        ed.new_window(&Theme::default());
+        assert_eq!(ed.active_editor().tab_width(), 3);
+    }
+
+    #[test]
+    fn applied_recent_files_appear_in_the_file_menu() {
+        let mut ed = app();
+        let settings = Settings {
+            recent: vec![PathBuf::from("/a/alpha.txt"), PathBuf::from("/b/beta.rs")],
+            ..Settings::default()
+        };
+        ed.apply_settings(settings, &Theme::default());
+
+        // File items now read: New, Open, Save, Save As, <recent 0>, <recent 1>, Exit.
+        // Selecting the first recent entry posts its CM_RECENT command.
+        keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File (New highlighted)
+        for _ in 0..4 {
+            keydown(&mut ed, KeyCode::Down, Modifiers::NONE);
+        }
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
+        assert_eq!(posted, vec![recent_command(0)]);
+    }
+
+    #[test]
+    fn the_recent_files_label_numbers_the_file_name() {
+        assert_eq!(
+            recent_label(0, Path::new("/home/me/notes.txt")),
+            "1 notes.txt"
+        );
+        assert_eq!(recent_label(2, Path::new("relative.rs")), "3 relative.rs");
+    }
+
+    #[test]
+    fn the_edit_menu_lists_settings_last() {
+        let mut ed = app();
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit (Undo highlighted)
+        // Undo, Redo, Cut, Copy, Paste, Settings — five Downs to reach Settings.
+        for _ in 0..5 {
+            keydown(&mut ed, KeyCode::Down, Modifiers::NONE);
+        }
+        let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE);
+        assert_eq!(posted, vec![CM_SETTINGS]);
     }
 
     // --- clipboard (ADR 0019) ---

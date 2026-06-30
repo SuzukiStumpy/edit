@@ -45,6 +45,11 @@ impl CheckBox {
     pub fn is_checked(&self) -> bool {
         self.checked
     }
+
+    /// Sets the checked state directly (e.g. seeding a dialog from saved options).
+    pub fn set_checked(&mut self, checked: bool) {
+        self.checked = checked;
+    }
 }
 
 impl View for CheckBox {

@@ -56,6 +56,14 @@ impl FindDialog {
         dialog
     }
 
+    /// Builder: seed the case / whole-word checkboxes from the saved Find options
+    /// so the dialog reopens the way the user last left it (ADR 0025).
+    pub fn with_options(mut self, case_sensitive: bool, whole_word: bool) -> Self {
+        self.case.set_checked(case_sensitive);
+        self.word.set_checked(whole_word);
+        self
+    }
+
     /// The query built from the field and the case/whole-word options.
     pub fn query(&self) -> Query {
         Query {
@@ -245,6 +253,19 @@ mod tests {
         for c in s.chars() {
             press(d, KeyCode::Char(c));
         }
+    }
+
+    #[test]
+    fn with_options_seeds_the_checkboxes() {
+        let q = FindDialog::new(&Theme::default())
+            .with_options(true, true)
+            .query();
+        assert!(q.case_sensitive);
+        assert!(q.whole_word);
+        // The default leaves both off.
+        let q = dialog().query();
+        assert!(!q.case_sensitive);
+        assert!(!q.whole_word);
     }
 
     #[test]
