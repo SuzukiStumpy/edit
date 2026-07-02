@@ -63,7 +63,7 @@ pub const CM_TILE: Command = Command(CM_USER + 34);
 pub const CM_ZOOM: Command = Command(CM_USER + 35);
 
 /// Help ▸ About — show the About box. Works on an empty desktop (needs no
-/// document), so it sits in the [`handle_command`] allowlist alongside New/Open.
+/// document), so it sits in the `handle_command` allowlist alongside New/Open.
 pub const CM_ABOUT: Command = Command(CM_USER + 40);
 
 /// Edit ▸ Settings — open the Settings dialog. Needs no document, so it is in the
@@ -1187,8 +1187,8 @@ impl EditorApp {
 
     /// Routes `event` through the three local passes (menu → editor → status) and
     /// returns the commands those passes posted, for the driver to act on
-    /// (ADR 0018). Gated by the live [`command_set`](Self::command_set): a
-    /// disabled command's key or menu selection posts nothing.
+    /// (ADR 0018). Gated by the live `command_set`: a disabled command's key
+    /// or menu selection posts nothing.
     pub fn dispatch(&mut self, event: &Event) -> Vec<Command> {
         let commands = self.command_set();
         let mut ctx = Context::new(&commands);

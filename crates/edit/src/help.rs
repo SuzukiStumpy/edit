@@ -1,10 +1,9 @@
 //! The editor's help: the baked-in content and a modal two-pane viewer.
 //!
 //! The viewer is an editor concept (like the `dialogs` modals): it composes the
-//! generic `rvision` help parts — the [`HelpContents`](rvision::help::HelpContents)
-//! model and the [`HelpPane`](rvision::widgets::HelpPane) page renderer — with a
-//! [`ListBox`](rvision::widgets::ListBox) of topic titles, run modally via
-//! [`exec_view`](rvision::app::Application::exec_view) (ADR 0017/0018). The
+//! generic `rvision` help parts — the [`HelpContents`] model and the
+//! [`HelpPane`] page renderer — with a [`ListBox`] of topic titles, run
+//! modally via [`exec_view`](rvision::app::Application::exec_view) (ADR 0017/0018). The
 //! framework's own (desktop-window) viewer is deferred until the windowing
 //! question is settled (see the roadmap Backlog); this modal needs none of that.
 //!
