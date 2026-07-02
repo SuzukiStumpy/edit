@@ -12,8 +12,8 @@ name = "edit"
 path = "src/main.rs"
 
 [dependencies]
-rvision = { path = "../rvision" }
-unicode-segmentation.workspace = true      # Phase 1 — grapheme navigation in the text model (ADR 0006, 0008)
+rvision = { git = "https://github.com/SuzukiStumpy/rvision", rev = "957a7936cc42091b9fd50a2433c50498a8998fb5" }
+unicode-segmentation.workspace = true      # Phase 1 — grapheme navigation in the text model (rvision's ADR 0006, this repo's ADR 0008)
 
 [dev-dependencies]
 insta.workspace = true                     # Phase 6 — editor render snapshot tests (ADR 0013)

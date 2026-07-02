@@ -1,5 +1,11 @@
 # Roadmap
 
+> `rvision` was extracted into its own repository
+> ([SuzukiStumpy/rvision](https://github.com/SuzukiStumpy/rvision)) after
+> Phase 10. Everything below is the history of how the two evolved together up
+> to that point; the framework's own future work now lives in its repo, not
+> here.
+
 Phased delivery plan for `rvision` (the framework) and `edit` (the editor).
 Each phase is shippable and fully tested before the next begins. Decisions
 referenced as `ADR NNNN` live in [`adr/`](adr/).

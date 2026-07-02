@@ -2,7 +2,7 @@
 
 - **Status:** Done
 - **Phase:** 6 (editor) — 6a; clipboard 7a; undo/redo 7b
-- **Related ADRs:** 0006 (full Unicode), 0008 (line-array text), 0011 (reversible
+- **Related ADRs:** rvision's ADR 0006 (full Unicode), 0008 (line-array text), 0011 (reversible
   edits + journal), 0015 (canvas), 0017 (focus-in-draw push), 0019 (app-owned
   clipboard)
 
@@ -95,7 +95,7 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   `selected_text` / `take_selection` (Cut returns the span then deletes it) /
   `insert_text` (Paste replaces any selection, lands the caret at the far end of
   the inserted text, and normalises `\r`/`\r\n` line endings to the buffer's `\n`
-  so a bracketed paste lands as real lines — ADR 0022). Cut and paste are ordinary
+  so a bracketed paste lands as real lines — rvision's ADR 0012). Cut and paste are ordinary
   `Edit`s, so they will undo
   cleanly once 7b lands the journal (ADR 0019).
 - **Viewport** scrolls minimally to keep the cursor visible in both axes; a resize
@@ -103,7 +103,7 @@ impl View for EditorView { /* bounds, draw, handle_event, focusable=true, set_fo
   a line below the document is simply not drawn.
 - **Cursor/selection render** as styled cells (reverse-video caret like
   `InputLine`; `Role::Selection` over the selected span), caret only when focused
-  (ADR 0017). No hardware cursor yet.
+  (rvision's ADR 0010). No hardware cursor yet.
 - Edge cases: empty document (one blank line); cursor at end-of-line / end-of-doc;
   Backspace at column 0 joins the previous line; Delete at line end joins the next;
   tab + wide-char column math; horizontal scroll past the left edge.

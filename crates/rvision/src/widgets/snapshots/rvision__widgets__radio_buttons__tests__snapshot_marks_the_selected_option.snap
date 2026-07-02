@@ -1,7 +1,0 @@
----
-source: crates/rvision/src/widgets/radio_buttons.rs
-expression: buf.to_text()
----
-( ) Unix    
-(•) DOS     
-( ) Mac

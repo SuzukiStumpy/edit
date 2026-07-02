@@ -2,7 +2,7 @@
 
 - **Status:** Done
 - **Phase:** 7 (editing features) — sub-phase 7c.2
-- **Related ADRs:** 0006 (full Unicode), 0008 (line-array text)
+- **Related ADRs:** rvision's ADR 0006 (full Unicode), 0008 (line-array text)
 
 ## Purpose
 

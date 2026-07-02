@@ -2,7 +2,7 @@
 
 - **Status:** Done (Phase 6); extended for MDI (Phase 8)
 - **Phase:** 6 (editor, single document) — sub-phase 6c; 8 (MDI)
-- **Related ADRs:** 0016 (Shell/menu overlay), 0017 (modal dialogs), 0018 (bespoke
+- **Related ADRs:** rvision's ADR 0009 (Shell/menu overlay), 0010 (modal dialogs), 0018 (bespoke
   driver loop), 0010 (file handling), 0009 (MDI, phased)
 
 > Note: `docs/specs/app.md` covers `rvision::app` (the framework loop/Shell). This
@@ -69,7 +69,7 @@ pub fn run<T: Backend + EventSource>(app: Application<T>, ed: EditorApp, theme: 
 - **Concrete ownership:** `EditorApp` owns the `EditorView`, so Open/Save reach the
   document with no downcast and no shared `Rc<RefCell>`.
 - **Three local key passes:** menu bar (pre-process / modal while open) → editor
-  (focused) → status line (post-process global keys), mirroring `Shell` (ADR 0016).
+  (focused) → status line (post-process global keys), mirroring `Shell` (rvision's ADR 0009).
 - **Layout:** menu row on top, status row on bottom, the editor window filling the
   middle; the editor's interior is the desktop region inset by the one-cell border;
   resize relays out and re-clamps the editor's scroll.

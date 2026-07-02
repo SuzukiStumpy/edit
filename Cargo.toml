@@ -1,22 +1,25 @@
 # Workspace root for the `edit` project.
 #
-# Two member crates:
-#   * rvision — the TurboVision-style terminal UI framework (library)
-#   * edit    — the text-mode editor binary, built on rvision
+# `rvision` (the TurboVision-style terminal UI framework `edit` is built on)
+# used to be a workspace member here; it now lives in its own repository
+# (https://github.com/SuzukiStumpy/rvision) and is pulled in as a git
+# dependency by crates/edit/Cargo.toml. This stays a (single-member)
+# workspace rather than un-workspacing entirely, for consistency and room to
+# grow.
 #
 # See docs/roadmap.md for the phased plan and docs/adr/ for the decisions
 # behind this layout (ADR 0012).
 
 [workspace]
 resolver = "3"
-members = ["crates/rvision", "crates/edit"]
+members = ["crates/edit"]
 
 [workspace.package]
-# Single source of truth for the version; both crates inherit it via
-# `version.workspace = true` and move in lockstep (ADR 0024). release-please
-# rewrites the value on the annotated line below — its `rust` updater does not
-# follow `[workspace.package]` inheritance, so we drive it with the format-
-# agnostic generic updater keyed on this `x-release-please-version` marker.
+# Single source of truth for the version; `edit` inherits it via
+# `version.workspace = true` (ADR 0024). release-please rewrites the value on
+# the annotated line below — its `rust` updater does not follow
+# `[workspace.package]` inheritance, so we drive it with the format-agnostic
+# generic updater keyed on this `x-release-please-version` marker.
 version = "1.0.0" # x-release-please-version
 edition = "2024"
 rust-version = "1.85"        # MSRV — see rust-toolchain.toml and ADR 0012
@@ -25,15 +28,16 @@ authors = ["medwards"]
 repository = "https://github.com/SuzukiStumpy/edit"
 
 # Dependencies are declared once here and inherited by member crates via
-# `<crate>.workspace = true`, so the crate budget (ADR 0001/0006/0013) lives
-# in exactly one place.
+# `<crate>.workspace = true`. crossterm/unicode-width moved out with rvision
+# (see the workspace note above); what's left is what `edit` itself uses
+# directly.
 [workspace.dependencies]
-# Runtime — OS/terminal boundary and Unicode data tables only (ADR 0001, 0006).
-crossterm = "0.28"
-unicode-width = "0.2"
 unicode-segmentation = "1"
-# Dev-only — snapshot testing (ADR 0013).
+# Dev-only — snapshot testing.
 insta = "1"
+
+[patch."https://github.com/SuzukiStumpy/rvision"]
+rvision = { path = "../rvision" }
 
 # Optimised profile keeps the released editor snappy; nothing exotic.
 [profile.release]

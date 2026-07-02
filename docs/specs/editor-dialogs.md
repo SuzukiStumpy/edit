@@ -2,7 +2,7 @@
 
 - **Status:** Done
 - **Phase:** 7 (editing features) — sub-phase 7c
-- **Related ADRs:** 0017 (modal dialogs via `exec_view` + focus-aware controls),
+- **Related ADRs:** rvision's ADR 0010 (modal dialogs via `exec_view` + focus-aware controls),
   0018 (editor app drives the modals)
 
 ## Purpose
@@ -12,7 +12,7 @@ crate (they are editor concepts) but composed from generic `rvision` controls
 (`InputLine`, `CheckBox`, `Button`). Each owns its controls **concretely** (like
 `FileDialog`) so the driver can read the typed value back after
 [`exec_view`](rvision::app::Application::exec_view) returns `CM_OK`, with no
-downcast and no view IDs (ADR 0003/0017). `rvision` stays editor-agnostic.
+downcast and no view IDs (rvision's ADR 0003/0010). `rvision` stays editor-agnostic.
 
 ## Public interface
 
@@ -45,7 +45,7 @@ impl ReplaceDialog {
 ## Behaviour & invariants
 
 - **Self-contained focus.** `Tab`/`BackTab` cycle the controls; the focused
-  control draws focused (ADR 0017). `Esc` posts `CM_CANCEL`; `Enter` accepts
+  control draws focused (rvision's ADR 0010). `Esc` posts `CM_CANCEL`; `Enter` accepts
   (`CM_OK`) unless focus is on Cancel.
 - **Value read after the fact.** The dialog never mutates the document; the driver
   reads `line()` / `query()` / options once `exec_view` returns `CM_OK` and then

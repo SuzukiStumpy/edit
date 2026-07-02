@@ -1,8 +1,0 @@
----
-source: crates/rvision/src/canvas.rs
-expression: buf.to_text()
----
-              
-  ┌─ Hi ───┐  
-  │ edit   │  
-  └────────┘
