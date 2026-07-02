@@ -28,6 +28,9 @@ pub enum Role {
     MenuSelected,
     /// A disabled (greyed) menu item.
     MenuDisabled,
+    /// The highlighted accelerator letter within a menu title or item label
+    /// (TurboVision's red hot-key character).
+    MenuHotkey,
     /// The bottom status bar background.
     StatusBar,
     /// A highlighted shortcut key in the status bar.
@@ -51,7 +54,7 @@ pub enum Role {
 
 impl Role {
     /// Every role, in discriminant order (so `ALL[i] as usize == i`).
-    pub const ALL: [Role; 16] = [
+    pub const ALL: [Role; 17] = [
         Role::DesktopBackground,
         Role::WindowFrame,
         Role::WindowTitle,
@@ -59,6 +62,7 @@ impl Role {
         Role::MenuBar,
         Role::MenuSelected,
         Role::MenuDisabled,
+        Role::MenuHotkey,
         Role::StatusBar,
         Role::StatusKey,
         Role::ButtonNormal,
@@ -111,6 +115,7 @@ impl Default for Theme {
         styles[Role::MenuBar as usize] = cga(Color16::Black, Color16::LightGray);
         styles[Role::MenuSelected as usize] = cga(Color16::Black, Color16::Green);
         styles[Role::MenuDisabled as usize] = cga(Color16::DarkGray, Color16::LightGray);
+        styles[Role::MenuHotkey as usize] = cga(Color16::Red, Color16::LightGray);
         styles[Role::StatusBar as usize] = cga(Color16::Black, Color16::LightGray);
         styles[Role::StatusKey as usize] = cga(Color16::Red, Color16::LightGray);
         styles[Role::ButtonNormal as usize] = cga(Color16::Black, Color16::Green);
@@ -170,6 +175,11 @@ mod tests {
         assert_eq!(
             t.style(Role::WindowTitleInactive),
             cga(Color16::LightGray, Color16::Blue)
+        );
+        // Phase 4 menu accelerator letter: red, like the status line's key hint.
+        assert_eq!(
+            t.style(Role::MenuHotkey),
+            cga(Color16::Red, Color16::LightGray)
         );
     }
 

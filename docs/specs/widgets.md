@@ -81,13 +81,17 @@ impl StatusLine {
 impl View for StatusLine { /* a matching KeyEvent posts its (enabled) command */ }
 
 // --- MenuBar + Menu: titles across the top, pull-downs below ---
-pub struct MenuItem { label: String, command: Command, shortcut: Option<String> }
+pub struct MenuItem { label: String, command: Command, shortcut: Option<String>, hotkey: Option<char> }
 impl MenuItem {
-    pub fn new(label: &str, command: Command) -> Self;
+    pub fn new(label: &str, command: Command) -> Self;    // hotkey defaults to label's first letter
     pub fn with_shortcut(self, shortcut: &str) -> Self;   // display-only label
+    pub fn with_hotkey(self, hotkey: char) -> Self;        // override, e.g. Save/Save As collision
 }
-pub struct Menu { title: String, items: Vec<MenuItem> }   // title's first letter is its Alt hot-key
-impl Menu { pub fn new(title: &str, items: Vec<MenuItem>) -> Self; }
+pub struct Menu { title: String, items: Vec<MenuItem>, hotkey: Option<char> }
+impl Menu {
+    pub fn new(title: &str, items: Vec<MenuItem>) -> Self; // hotkey defaults to title's first letter
+    pub fn with_hotkey(self, hotkey: char) -> Self;         // override the Alt hot-key
+}
 pub struct MenuBar { bounds: Rect, menus: Vec<Menu>, open: Option<usize>, highlight: usize, .. }
 impl MenuBar {
     pub fn new(bounds: Rect, menus: Vec<Menu>, theme: &Theme) -> Self;
@@ -128,17 +132,24 @@ impl View for MenuBar { /* draws the bar; handle_event runs the menu state machi
   command (enabled-gated by `Context`, ADR 0003) and is consumed; other events are
   ignored. Drawn left→right, each item's key glyph in `key_style`.
 - **MenuBar / Menu.** A small state machine (ADR 0016), no modal loop yet:
-  - *Closed:* consumes `Alt`+a title's first letter (opens that menu) and `F10`
-    (opens the first menu). Every other event is ignored, so it never eats the
-    editor's keys.
+  - *Closed:* consumes `Alt`+a title's hot-key (opens that menu) and `F10` (opens
+    the first menu). Every other event is ignored, so it never eats the editor's
+    keys.
   - *Open:* modal — consumes every `Key`. `Left`/`Right` switch the open menu
     (wrap), `Up`/`Down` move the highlight (wrap), `Enter` posts the highlighted
-    item's command and closes, `Esc` closes. A disabled item's command is gated by
-    `Context` (never posted); selecting it closes the menu like TV.
+    item's command and closes, a plain letter matching an item's hot-key posts
+    that item's command and closes (no `Up`/`Down` needed), `Esc` closes. A
+    disabled item's command is gated by `Context` (never posted); selecting it
+    (via `Enter` or its hot-key) still closes the menu like TV.
+  - Each `Menu`/`MenuItem`'s hot-key defaults to its title/label's first letter
+    (case-insensitive) and is highlighted in `Role::MenuHotkey`; the app overrides
+    it with `with_hotkey` once two items in the same menu would otherwise collide
+    (e.g. "Cut" and "Copy" both defaulting to `c`).
   - The bar draws titles separated by spaces; the open title is highlighted.
     `draw_overlay` draws the pull-down box under the open title with items, their
     shortcuts right-aligned, the highlight in `MenuSelected`, disabled items in
-    `MenuDisabled`. The overlay is the shell's last draw, over the whole frame.
+    `MenuDisabled` (with no hot-key highlight — a letter that can't be pressed
+    isn't singled out). The overlay is the shell's last draw, over the whole frame.
 
 ## Collaborators
 
@@ -155,15 +166,14 @@ impl View for MenuBar { /* draws the bar; handle_event runs the menu state machi
   menu open (bar + pull-down overlay).
 - **Interaction (scripted events):** status-line key posts the right command and a
   disabled one does not; menu opens on `Alt`-letter/`F10`, `Left`/`Right` and
-  `Up`/`Down` move within wrap, `Enter` posts + closes, `Esc` closes; a closed menu
-  bar ignores ordinary keys; a window routes keys to its interior.
+  `Up`/`Down` move within wrap, `Enter` posts + closes, a hot-key letter posts +
+  closes without `Up`/`Down`, an unmatched letter is swallowed, `Esc` closes; a
+  closed menu bar ignores ordinary keys; a window routes keys to its interior.
 - **Logic:** `Window::interior_bounds` insets by one; `Desktop::active` is the
   topmost window.
 - **Manual:** the `chrome` example on a real terminal (see [`shell.md`](shell.md)).
 
 ## Open questions
 
-- Underlined hot-key letters in titles/items (TV's `~X~`): use the first letter
-  for now; richer markup is a later polish.
 - Focus-aware frame styling reads a stored `active` flag set by the desktop; the
   general focus-in-draw question (ADR-tracked in `view.md`) is otherwise unchanged.

@@ -386,7 +386,10 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   - *Closeable to an empty desktop.* Closing the last window no longer resets it
     to a fresh Untitled — the desktop can be emptied; New/Open spawn a window
     again, and document-dependent commands/keys quietly no-op while it is empty.
-- Verify on Windows and macOS; iron out terminal quirks.
+- Verify on Windows and macOS; iron out terminal quirks. *Partial:* manually
+  verified on Linux and Intel macOS; Windows x86_64 and Apple-silicon macOS still
+  unverified (CI builds all four — 9dc13a5 — but the TUI/terminal-quirk pass on
+  those two is pending hardware).
 - **Clipboard ↔ host ✅** — *out:* Cut/Copy mirror to the host clipboard (works
   over SSH) via `Backend::set_clipboard` + a hand-rolled Base64 `osc52` encoder
   (no crate); OSC 52 read-back is left behind the seam as fragile/terminal-gated
@@ -471,10 +474,6 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 Captured so they aren't lost; none are scheduled into a phase yet. Roughly
 ordered by how much shared machinery they need.
 
-- **Disabled (greyed) menu items.** First deferred in Phase 4: drawing an item
-  dimmed when its command is disabled needs the `CommandSet` reachable at *draw*
-  time (the same "state-in-draw" family as focus-in-draw). Dispatch already gates
-  disabled commands (they post nothing); this is only the *visual* half.
 - **Cascading menus (submenus).** A `MenuItem` that opens a nested pull-down
   instead of posting a command. Extends the `MenuBar` state machine (the open path
   becomes a stack) and the overlay draw + hit-testing (ADR 0016).
