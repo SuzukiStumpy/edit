@@ -776,6 +776,74 @@ impl EditorApp {
         self.doc().is_modified()
     }
 
+    /// Which commands are currently live, from document state: undo/redo
+    /// availability, selection, the dirty flag, and whether any window is open at
+    /// all. `dispatch` gates on this (a disabled command's key or menu selection
+    /// is a no-op, ADR 0003); [`sync_menu`](Self::sync_menu) pushes it (plus one
+    /// Paste-specific tweak) into the menu bar so greying and gating agree by
+    /// construction (ADR 0004).
+    fn command_set(&self) -> CommandSet {
+        let mut commands = CommandSet::new();
+        if self.documents.is_empty() {
+            // Nothing to act on: only the empty-desktop allowlist in
+            // `handle_command` (New/Open/Quit/About/Help/Settings, plus a recent
+            // entry) does anything.
+            for command in [
+                CM_SAVE,
+                CM_SAVE_AS,
+                CM_UNDO,
+                CM_REDO,
+                CM_CUT,
+                CM_COPY,
+                CM_PASTE,
+                CM_FIND,
+                CM_FIND_NEXT,
+                CM_REPLACE,
+                CM_GOTO,
+                CM_CLOSE,
+                CM_NEXT_WINDOW,
+                CM_PREV_WINDOW,
+                CM_CASCADE,
+                CM_TILE,
+                CM_ZOOM,
+            ] {
+                commands.disable(command);
+            }
+            return commands;
+        }
+        let editor = self.active_editor();
+        if !editor.can_undo() {
+            commands.disable(CM_UNDO);
+        }
+        if !editor.can_redo() {
+            commands.disable(CM_REDO);
+        }
+        if !editor.has_selection() {
+            commands.disable(CM_CUT);
+            commands.disable(CM_COPY);
+        }
+        if !editor.is_modified() {
+            commands.disable(CM_SAVE);
+        }
+        commands
+    }
+
+    /// Pushes the live command state into the menu bar before a draw, so a
+    /// disabled item greys itself (`MenuBar::sync_enabled`, mirrors the
+    /// `View::set_focused` state-in-draw push, ADR 0004).
+    ///
+    /// Paste is the one place this diverges from [`command_set`](Self::command_set):
+    /// an empty clipboard greys the menu entry, but must not disable `CM_PASTE` in
+    /// `dispatch`'s `CommandSet`, or Ctrl-V would silently do nothing instead of
+    /// reaching the "clipboard is empty" explainer in `handle_command` (ADR 0021/0022).
+    fn sync_menu(&mut self) {
+        let mut commands = self.command_set();
+        if self.clipboard.is_empty() {
+            commands.disable(CM_PASTE);
+        }
+        self.menu_bar.sync_enabled(&commands);
+    }
+
     /// Whether the loop should stop.
     pub fn is_finished(&self) -> bool {
         self.finished
@@ -1109,9 +1177,11 @@ impl EditorApp {
 
     /// Routes `event` through the three local passes (menu → editor → status) and
     /// returns the commands those passes posted, for the driver to act on
-    /// (ADR 0018).
-    pub fn dispatch(&mut self, event: &Event, commands: &CommandSet) -> Vec<Command> {
-        let mut ctx = Context::new(commands);
+    /// (ADR 0018). Gated by the live [`command_set`](Self::command_set): a
+    /// disabled command's key or menu selection posts nothing.
+    pub fn dispatch(&mut self, event: &Event) -> Vec<Command> {
+        let commands = self.command_set();
+        let mut ctx = Context::new(&commands);
         match event {
             Event::Key(key) => {
                 // menu (pre-process) → window keys → active editor → status (post).
@@ -1292,6 +1362,7 @@ impl EditorApp {
 
 impl Program for EditorApp {
     fn draw(&mut self, frame: &mut Buffer) {
+        self.sync_menu();
         let mut canvas = Canvas::new(frame);
         self.draw_canvas(&mut canvas);
     }
@@ -1300,7 +1371,7 @@ impl Program for EditorApp {
     /// ever calls [`draw`](Self::draw)); the driver uses [`dispatch`](Self::dispatch)
     /// instead, since it needs the posted commands.
     fn handle_event(&mut self, event: &Event) -> EventResult {
-        let _ = self.dispatch(event, &CommandSet::new());
+        let _ = self.dispatch(event);
         EventResult::Ignored
     }
 
@@ -1323,7 +1394,6 @@ pub fn run<T: Backend + EventSource>(
     mut ed: EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let commands = CommandSet::new();
     loop {
         let size = app.terminal().size();
         if size != ed.size {
@@ -1344,7 +1414,7 @@ pub fn run<T: Backend + EventSource>(
         if let Event::Resize(new_size) = event {
             ed.relayout(new_size);
         }
-        for command in ed.dispatch(&event, &commands) {
+        for command in ed.dispatch(&event) {
             handle_command(command, &mut app, &mut ed, theme)?;
         }
     }
@@ -1769,7 +1839,7 @@ mod tests {
     }
 
     fn keydown(ed: &mut EditorApp, code: KeyCode, mods: Modifiers) -> Vec<Command> {
-        ed.dispatch(&Event::Key(KeyEvent::new(code, mods)), &CommandSet::new())
+        ed.dispatch(&Event::Key(KeyEvent::new(code, mods)))
     }
 
     #[test]
@@ -1995,8 +2065,7 @@ mod tests {
     fn a_bracketed_paste_reaches_the_active_editor_and_mirrors_the_clipboard() {
         // Inbound paste (ADR 0022): the driver routes Event::Paste to the editor…
         let mut ed = app();
-        let cs = CommandSet::new();
-        let posted = ed.dispatch(&Event::Paste("pasted\ntext".to_string()), &cs);
+        let posted = ed.dispatch(&Event::Paste("pasted\ntext".to_string()));
         assert!(posted.is_empty());
         assert_eq!(ed.active_editor().text(), "pasted\ntext");
         // …and refreshes the internal clipboard, so a later Ctrl-V repeats it.
@@ -2013,9 +2082,136 @@ mod tests {
         assert_eq!(sys.terminal().clipboard, None);
     }
 
+    // --- disabled (greyed) menu items (Phase 4 backlog) ---
+
+    #[test]
+    fn command_set_disables_undo_redo_cut_copy_and_save_until_there_is_something_to_act_on() {
+        let ed = app(); // fresh, untouched document
+        let cs = ed.command_set();
+        for command in [CM_UNDO, CM_REDO, CM_CUT, CM_COPY, CM_SAVE] {
+            assert!(!cs.is_enabled(command), "{command:?} should start disabled");
+        }
+        // These need only an open document, not any particular state.
+        for command in [CM_SAVE_AS, CM_FIND, CM_FIND_NEXT, CM_REPLACE, CM_GOTO] {
+            assert!(cs.is_enabled(command), "{command:?} needs no special state");
+        }
+
+        let mut ed = ed_with_selection(); // typed "abc", then selected it
+        let cs = ed.command_set();
+        assert!(cs.is_enabled(CM_UNDO), "typing left something to undo");
+        assert!(cs.is_enabled(CM_CUT), "the selection makes Cut/Copy live");
+        assert!(cs.is_enabled(CM_COPY));
+        assert!(cs.is_enabled(CM_SAVE), "typing modified the document");
+        assert!(!cs.is_enabled(CM_REDO), "nothing has been undone yet");
+
+        ed.active_editor_mut().undo();
+        assert!(
+            ed.command_set().is_enabled(CM_REDO),
+            "the undo left something to redo"
+        );
+    }
+
+    #[test]
+    fn command_set_disables_everything_but_the_empty_desktop_allowlist_with_no_window_open() {
+        let mut ed = app();
+        ed.remove_active_window();
+        let cs = ed.command_set();
+        for command in [
+            CM_SAVE,
+            CM_SAVE_AS,
+            CM_UNDO,
+            CM_REDO,
+            CM_CUT,
+            CM_COPY,
+            CM_PASTE,
+            CM_FIND,
+            CM_FIND_NEXT,
+            CM_REPLACE,
+            CM_GOTO,
+            CM_CLOSE,
+            CM_NEXT_WINDOW,
+            CM_PREV_WINDOW,
+            CM_CASCADE,
+            CM_TILE,
+            CM_ZOOM,
+        ] {
+            assert!(!cs.is_enabled(command), "{command:?} needs a document");
+        }
+        // Mirrors the empty-desktop allowlist in `handle_command`.
+        for command in [CM_NEW, CM_OPEN, CM_QUIT, CM_ABOUT, CM_HELP, CM_SETTINGS] {
+            assert!(
+                cs.is_enabled(command),
+                "{command:?} works on an empty desktop"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_v_still_posts_paste_on_an_empty_clipboard_though_the_menu_greys_it() {
+        // Paste is the one command where the menu's grey state and dispatch's gate
+        // deliberately disagree: greyed in the pull-down, but Ctrl-V still posts
+        // CM_PASTE so handle_command's "clipboard is empty" explainer still fires.
+        let mut ed = app();
+        assert!(ed.clipboard().is_empty());
+        assert!(ed.command_set().is_enabled(CM_PASTE));
+        let posted = keydown(&mut ed, KeyCode::Char('v'), Modifiers::CONTROL);
+        assert_eq!(posted, vec![CM_PASTE]);
+    }
+
+    #[test]
+    fn disabled_edit_items_grey_in_the_running_menu() {
+        // The framework half (rvision's MenuBar::sync_enabled) was proven in
+        // isolation; this is the editor half actually reaching it, so a disabled
+        // item is visible as grey in the running app, not just in a unit test.
+        let theme = THEME();
+        let disabled = theme.style(Role::MenuDisabled);
+
+        let mut ed = app(); // fresh: no undo, no selection, empty clipboard, unmodified
+        let width = ed.size.width;
+        let row_is_greyed = |buf: &Buffer, row: i16| {
+            (0..width).any(|x| buf.get(Point::new(x, row)).unwrap().style() == disabled)
+        };
+
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit (Undo highlighted)
+        let mut buf = Buffer::new(ed.size);
+        ed.draw(&mut buf); // Program::draw syncs the live CommandSet in first
+
+        // Undo(row 2)/Redo(3)/Cut(4)/Copy(5): nothing to undo/redo/select yet.
+        for row in [2, 3, 4, 5] {
+            assert!(row_is_greyed(&buf, row), "row {row} should be greyed");
+        }
+        // Paste(6) greys too on an empty clipboard (dispatch still gates it
+        // differently — see the Ctrl-V test above).
+        assert!(row_is_greyed(&buf, 6), "Paste should be greyed");
+        // Settings...(7) needs no state, so it stays live.
+        assert!(!row_is_greyed(&buf, 7), "Settings should not be greyed");
+
+        keydown(&mut ed, KeyCode::Esc, Modifiers::NONE); // close without posting
+        type_chars(&mut ed, "abc");
+        run_key(&mut ed, KeyCode::Home, Modifiers::CONTROL);
+        run_key(&mut ed, KeyCode::End, Modifiers::SHIFT); // select "abc"
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // reopen Edit
+        let mut buf = Buffer::new(ed.size);
+        ed.draw(&mut buf);
+
+        for row in [2, 4, 5] {
+            assert!(
+                !row_is_greyed(&buf, row),
+                "row {row} should no longer be greyed"
+            );
+        }
+        assert!(
+            row_is_greyed(&buf, 6),
+            "Paste is still greyed: the clipboard is still empty"
+        );
+    }
+
     #[test]
     fn the_edit_menu_posts_its_commands() {
-        let mut ed = app();
+        // A fresh, untouched document disables Undo and Cut (nothing to undo, no
+        // selection — see `command_set_disables_...` below), so give it typed,
+        // selected text to select from.
+        let mut ed = ed_with_selection();
         keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit (Undo highlighted)
         assert!(ed.menu_is_open());
         let posted = keydown(&mut ed, KeyCode::Enter, Modifiers::NONE); // first item: Undo
@@ -2546,14 +2742,11 @@ mod tests {
     // --- mouse: click-to-focus (Phase 9a) ---
 
     fn left_click(ed: &mut EditorApp, x: i16, y: i16) -> Vec<Command> {
-        ed.dispatch(
-            &Event::Mouse(MouseEvent {
-                kind: MouseKind::Down(MouseButton::Left),
-                pos: Point::new(x, y),
-                modifiers: Modifiers::NONE,
-            }),
-            &CommandSet::new(),
-        )
+        ed.dispatch(&Event::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            pos: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+        }))
     }
 
     #[test]
@@ -2616,14 +2809,11 @@ mod tests {
     // --- mouse: editor interior + wheel (Phase 9c) ---
 
     fn mouse_at(ed: &mut EditorApp, kind: MouseKind, x: i16, y: i16) -> Vec<Command> {
-        ed.dispatch(
-            &Event::Mouse(MouseEvent {
-                kind,
-                pos: Point::new(x, y),
-                modifiers: Modifiers::NONE,
-            }),
-            &CommandSet::new(),
-        )
+        ed.dispatch(&Event::Mouse(MouseEvent {
+            kind,
+            pos: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+        }))
     }
 
     #[test]

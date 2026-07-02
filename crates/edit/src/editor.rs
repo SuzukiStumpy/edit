@@ -304,6 +304,12 @@ impl EditorView {
         Some(self.doc.slice(start, end))
     }
 
+    /// Whether there is a non-empty selection, without paying for a copy of its
+    /// text (the menu greys Cut/Copy from this every frame).
+    pub fn has_selection(&self) -> bool {
+        self.selection_range().is_some()
+    }
+
     /// Repositions the viewport (e.g. when the host window is resized), re-clamping
     /// the scroll so the cursor stays visible.
     pub fn set_bounds(&mut self, bounds: Rect) {
@@ -1329,6 +1335,16 @@ mod tests {
         // With nothing selected it takes nothing and leaves the document alone.
         assert_eq!(e.take_selection(), None);
         assert_eq!(e.text(), "lo");
+    }
+
+    #[test]
+    fn has_selection_tracks_selected_text_without_copying_it() {
+        let mut e = editor(20, 5).clone_doc("hello");
+        assert!(!e.has_selection());
+        press(&mut e, KeyCode::Right, Modifiers::SHIFT);
+        assert!(e.has_selection());
+        press(&mut e, KeyCode::Right, Modifiers::NONE); // unshifted move clears it
+        assert!(!e.has_selection());
     }
 
     // --- go to line (7c) ---

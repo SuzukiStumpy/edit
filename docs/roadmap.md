@@ -474,10 +474,6 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 Captured so they aren't lost; none are scheduled into a phase yet. Roughly
 ordered by how much shared machinery they need.
 
-- **Disabled (greyed) menu items.** First deferred in Phase 4: drawing an item
-  dimmed when its command is disabled needs the `CommandSet` reachable at *draw*
-  time (the same "state-in-draw" family as focus-in-draw). Dispatch already gates
-  disabled commands (they post nothing); this is only the *visual* half.
 - **Cascading menus (submenus).** A `MenuItem` that opens a nested pull-down
   instead of posting a command. Extends the `MenuBar` state machine (the open path
   becomes a stack) and the overlay draw + hit-testing (ADR 0016).
