@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/SuzukiStumpy/edit/compare/v0.3.0...v1.0.0) (2026-07-02)
+
+
+### Documentation
+
+* note Windows verified, Apple-silicon macOS still pending ([5513fd3](https://github.com/SuzukiStumpy/edit/commit/5513fd37891da782248727a506744f094dbfd4a5))
+
 ## [0.3.0](https://github.com/SuzukiStumpy/edit/compare/v0.2.0...v0.3.0) (2026-07-02)
 
 
