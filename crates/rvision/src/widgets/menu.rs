@@ -569,7 +569,10 @@ mod tests {
         let mut cs = CommandSet::new();
         cs.disable(CM_NEW); // File item 0 = New (also the row highlighted on open)
         bar.sync_enabled(&cs);
-        bar.handle_event(&key(KeyCode::F(10), Modifiers::NONE), &mut Context::new(&cs));
+        bar.handle_event(
+            &key(KeyCode::F(10), Modifiers::NONE),
+            &mut Context::new(&cs),
+        );
 
         let mut buf = Buffer::new(Size::new(40, 6));
         let mut root = Canvas::new(&mut buf);
