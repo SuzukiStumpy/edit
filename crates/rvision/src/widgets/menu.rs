@@ -9,7 +9,7 @@
 
 use crate::canvas::Canvas;
 use crate::cell::Cell;
-use crate::color::Style;
+use crate::color::{Color, Style};
 use crate::command::{Command, CommandSet};
 use crate::event::{Event, EventResult, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind};
 use crate::geometry::{Point, Rect, Size};
@@ -23,6 +23,12 @@ pub struct MenuItem {
     label: String,
     command: Command,
     shortcut: Option<String>,
+    /// The accelerator letter: highlighted in the drawn label and, while this
+    /// item's menu is open, chosen by pressing it (no `Alt`) without needing
+    /// `Up`/`Down` first. Defaults to `label`'s first character; override with
+    /// [`with_hotkey`](Self::with_hotkey) once two items in the same menu would
+    /// otherwise collide (e.g. "Save" / "Save As").
+    hotkey: Option<char>,
 }
 
 impl MenuItem {
@@ -32,6 +38,7 @@ impl MenuItem {
             label: label.to_string(),
             command,
             shortcut: None,
+            hotkey: label.chars().next().map(|c| c.to_ascii_lowercase()),
         }
     }
 
@@ -40,13 +47,28 @@ impl MenuItem {
         self.shortcut = Some(shortcut.to_string());
         self
     }
+
+    /// Overrides the accelerator letter (case-insensitive) used to highlight
+    /// and choose this item while its menu is open.
+    pub fn with_hotkey(mut self, hotkey: char) -> Self {
+        self.hotkey = Some(hotkey.to_ascii_lowercase());
+        self
+    }
+
+    /// The accelerator letter, if any.
+    fn hotkey(&self) -> Option<char> {
+        self.hotkey
+    }
 }
 
-/// One pull-down: a title and its items. The title's first character is its
-/// `Alt`-hot-key (case-insensitive).
+/// One pull-down: a title and its items. The title's accelerator letter is its
+/// `Alt`-hot-key (case-insensitive) and is highlighted in the drawn title.
 pub struct Menu {
     title: String,
     items: Vec<MenuItem>,
+    /// Defaults to `title`'s first character; override with
+    /// [`with_hotkey`](Self::with_hotkey) once two menus would otherwise collide.
+    hotkey: Option<char>,
 }
 
 impl Menu {
@@ -55,12 +77,20 @@ impl Menu {
         Self {
             title: title.to_string(),
             items,
+            hotkey: title.chars().next().map(|c| c.to_ascii_lowercase()),
         }
     }
 
-    /// The `Alt`-hot-key that opens this menu: its title's first letter, lowercased.
+    /// Overrides the `Alt`-hot-key (case-insensitive) that opens this menu and
+    /// is highlighted in its title.
+    pub fn with_hotkey(mut self, hotkey: char) -> Self {
+        self.hotkey = Some(hotkey.to_ascii_lowercase());
+        self
+    }
+
+    /// The `Alt`-hot-key that opens this menu.
     fn hotkey(&self) -> Option<char> {
-        self.title.chars().next().map(|c| c.to_ascii_lowercase())
+        self.hotkey
     }
 }
 
@@ -73,6 +103,9 @@ pub struct MenuBar {
     bar_style: Style,
     selected_style: Style,
     disabled_style: Style,
+    /// The accelerator letter's foreground ([`Role::MenuHotkey`]), composed onto
+    /// whichever background a title or item is currently drawn in.
+    hotkey_fg: Color,
     /// Which commands are live, pushed in before a draw so disabled items can grey
     /// themselves (the same state-in-draw "push" as `View::set_focused`). Empty by
     /// default, so every item is enabled until the app says otherwise.
@@ -81,7 +114,8 @@ pub struct MenuBar {
 
 impl MenuBar {
     /// Creates a menu bar at `bounds` from `menus`, taking its colours from
-    /// `theme` ([`Role::MenuBar`], [`Role::MenuSelected`]).
+    /// `theme` ([`Role::MenuBar`], [`Role::MenuSelected`], [`Role::MenuDisabled`],
+    /// [`Role::MenuHotkey`]).
     pub fn new(bounds: Rect, menus: Vec<Menu>, theme: &Theme) -> Self {
         Self {
             bounds,
@@ -91,6 +125,7 @@ impl MenuBar {
             bar_style: theme.style(Role::MenuBar),
             selected_style: theme.style(Role::MenuSelected),
             disabled_style: theme.style(Role::MenuDisabled),
+            hotkey_fg: theme.style(Role::MenuHotkey).fg,
             commands: CommandSet::new(),
         }
     }
@@ -179,8 +214,9 @@ impl MenuBar {
     }
 
     /// Runs the modal key handling while a menu is open: arrows move, `Enter`
-    /// chooses, `Esc` closes; every other key is swallowed so nothing leaks to the
-    /// editor underneath. Returns the result (always `Consumed` while open).
+    /// chooses, a hot-key letter jumps straight to and chooses its item, `Esc`
+    /// closes; every other key is swallowed so nothing leaks to the editor
+    /// underneath. Returns the result (always `Consumed` while open).
     fn handle_open(&mut self, code: KeyCode, ctx: &mut Context) -> EventResult {
         let n = self.menus.len();
         let open = self.open.expect("handle_open called while closed");
@@ -196,6 +232,18 @@ impl MenuBar {
                 self.close();
                 // Gated by Context: a disabled item posts nothing (ADR 0003).
                 ctx.post(command);
+            }
+            KeyCode::Char(c) => {
+                let c = c.to_ascii_lowercase();
+                let hit = self.menus[open]
+                    .items
+                    .iter()
+                    .position(|item| item.hotkey() == Some(c));
+                if let Some(i) = hit {
+                    let command = self.menus[open].items[i].command;
+                    self.close();
+                    ctx.post(command); // Gated by Context, same as Enter (ADR 0003).
+                }
             }
             _ => {}
         }
@@ -312,9 +360,10 @@ impl MenuBar {
         canvas.draw_box(area, self.bar_style);
         for (i, item) in menu.items.iter().enumerate() {
             let row = 2 + i as i16;
+            let disabled = !self.commands.is_enabled(item.command);
             // A disabled item can't light up: it stays greyed even on the highlight
             // row, so the whole line (fill included) reads as unavailable.
-            let style = if !self.commands.is_enabled(item.command) {
+            let style = if disabled {
                 self.disabled_style
             } else if i == self.highlight {
                 self.selected_style
@@ -324,12 +373,46 @@ impl MenuBar {
             // Repaint the interior row so the highlight is a full-width bar.
             let inner = Rect::from_origin_size(Point::new(left + 1, row), Size::new(box_w - 2, 1));
             canvas.fill(inner, &Cell::blank(style));
-            canvas.put_str(Point::new(left + 2, row), &item.label, style);
+            if disabled {
+                // No hot-key highlight either: a letter that can't be pressed
+                // shouldn't be singled out.
+                canvas.put_str(Point::new(left + 2, row), &item.label, style);
+            } else {
+                self.put_hotkey_str(
+                    canvas,
+                    Point::new(left + 2, row),
+                    &item.label,
+                    style,
+                    item.hotkey(),
+                );
+            }
             if let Some(shortcut) = &item.shortcut {
                 let sx = left + box_w - 2 - shortcut.chars().count() as i16;
                 canvas.put_str(Point::new(sx, row), shortcut, style);
             }
         }
+    }
+
+    /// Draws `text` at `at` in `style`, except its hot-key character (if any),
+    /// which is drawn with the foreground swapped to [`Role::MenuHotkey`]'s
+    /// colour while keeping `style`'s background and attributes. Shared by a bar
+    /// title and an enabled pull-down item; a disabled item skips this and calls
+    /// [`Canvas::put_str`] directly instead. Returns the ending column, like
+    /// [`Canvas::put_str`].
+    fn put_hotkey_str(
+        &self,
+        canvas: &mut Canvas,
+        at: Point,
+        text: &str,
+        style: Style,
+        hotkey: Option<char>,
+    ) -> i16 {
+        let Some((pre, key, post)) = hotkey.and_then(|hk| split_at_hotkey(text, hk)) else {
+            return canvas.put_str(at, text, style);
+        };
+        let mut x = canvas.put_str(at, pre, style);
+        x = canvas.put_str(Point::new(x, at.y), key, style.fg(self.hotkey_fg));
+        canvas.put_str(Point::new(x, at.y), post, style)
     }
 
     /// The pull-down box width: widest "` label  shortcut `" line, plus borders.
@@ -352,6 +435,18 @@ impl MenuBar {
     }
 }
 
+/// Splits `text` around the first case-insensitive occurrence of `hotkey`, for
+/// drawing that one character in a different style. `None` if `hotkey` does not
+/// occur in `text` (e.g. a `with_hotkey` override that names a letter its own
+/// label doesn't contain), in which case the caller draws `text` plain.
+fn split_at_hotkey(text: &str, hotkey: char) -> Option<(&str, &str, &str)> {
+    let (i, ch) = text
+        .char_indices()
+        .find(|(_, c)| c.to_ascii_lowercase() == hotkey)?;
+    let end = i + ch.len_utf8();
+    Some((&text[..i], &text[i..end], &text[end..]))
+}
+
 impl View for MenuBar {
     fn bounds(&self) -> Rect {
         self.bounds
@@ -366,9 +461,21 @@ impl View for MenuBar {
             if self.open == Some(i) {
                 // Highlight the open title together with its surrounding spaces.
                 let label = format!(" {} ", menu.title);
-                canvas.put_str(Point::new(start - 1, 0), &label, self.selected_style);
+                self.put_hotkey_str(
+                    canvas,
+                    Point::new(start - 1, 0),
+                    &label,
+                    self.selected_style,
+                    menu.hotkey(),
+                );
             } else {
-                canvas.put_str(Point::new(start, 0), &menu.title, self.bar_style);
+                self.put_hotkey_str(
+                    canvas,
+                    Point::new(start, 0),
+                    &menu.title,
+                    self.bar_style,
+                    menu.hotkey(),
+                );
             }
         }
     }
@@ -584,10 +691,179 @@ mod tests {
             buf.get(Point::new(2, 2)).unwrap().style(),
             theme.style(Role::MenuDisabled)
         );
-        // Open... on row 3 is enabled -> ordinary bar style.
+        // Open... on row 3 is enabled -> ordinary bar style (column 3, past its
+        // hot-key 'O' at column 2, which now draws in Role::MenuHotkey).
+        assert_eq!(
+            buf.get(Point::new(3, 3)).unwrap().style(),
+            theme.style(Role::MenuBar)
+        );
+    }
+
+    // --- Hot-key letters (accelerators) ---
+
+    #[test]
+    fn hotkey_letter_selects_and_activates_the_item() {
+        // Pressing an item's hot-key while its menu is open chooses it
+        // immediately, like Enter, without needing Up/Down first.
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&key(KeyCode::F(10), Modifiers::NONE), &mut ctx); // File
+        let r = bar.handle_event(&key(KeyCode::Char('o'), Modifiers::NONE), &mut ctx); // Open...'s hot-key
+        assert_eq!(r, EventResult::Consumed);
+        assert!(!bar.is_open(), "choosing closes the menu");
+        assert_eq!(ctx.posted(), &[Event::Command(CM_OPEN)]);
+    }
+
+    #[test]
+    fn a_disabled_items_hotkey_closes_but_posts_nothing() {
+        let mut bar = bar();
+        let mut cs = CommandSet::new();
+        cs.disable(CM_NEW);
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&key(KeyCode::F(10), Modifiers::NONE), &mut ctx); // File, New = 'n'
+        bar.handle_event(&key(KeyCode::Char('n'), Modifiers::NONE), &mut ctx);
+        assert!(
+            !bar.is_open(),
+            "still closes, like Enter on a disabled item"
+        );
+        assert!(ctx.posted().is_empty());
+    }
+
+    #[test]
+    fn an_unmatched_letter_is_swallowed_not_leaked() {
+        let mut bar = bar();
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&key(KeyCode::F(10), Modifiers::NONE), &mut ctx); // File: 'n', 'o'
+        let r = bar.handle_event(&key(KeyCode::Char('z'), Modifiers::NONE), &mut ctx);
+        assert_eq!(r, EventResult::Consumed);
+        assert!(bar.is_open(), "no matching item, so nothing is chosen");
+        assert!(ctx.posted().is_empty());
+    }
+
+    #[test]
+    fn with_hotkey_overrides_the_default_first_letter() {
+        let mut bar = MenuBar::new(
+            rect(0, 0, 40, 1),
+            vec![Menu::new(
+                "File",
+                vec![
+                    MenuItem::new("Save", CM_NEW),
+                    MenuItem::new("Save As...", CM_OPEN).with_hotkey('a'),
+                ],
+            )],
+            &Theme::default(),
+        );
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        bar.handle_event(&key(KeyCode::F(10), Modifiers::NONE), &mut ctx);
+        let r = bar.handle_event(&key(KeyCode::Char('a'), Modifiers::NONE), &mut ctx);
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(
+            ctx.posted(),
+            &[Event::Command(CM_OPEN)],
+            "'a' picks Save As..., not its default first letter 's'"
+        );
+    }
+
+    #[test]
+    fn menu_with_hotkey_overrides_the_titles_default_first_letter() {
+        let mut bar = MenuBar::new(
+            rect(0, 0, 40, 1),
+            vec![
+                Menu::new("File", vec![]),
+                Menu::new("Search", vec![]).with_hotkey('r'),
+            ],
+            &Theme::default(),
+        );
+        let cs = CommandSet::new();
+        let mut ctx = Context::new(&cs);
+        let r = bar.handle_event(&key(KeyCode::Char('r'), Modifiers::ALT), &mut ctx);
+        assert_eq!(r, EventResult::Consumed);
+        assert_eq!(
+            bar.open,
+            Some(1),
+            "'r' opens Search via its overridden hot-key"
+        );
+    }
+
+    // --- Hot-key drawing ---
+
+    #[test]
+    fn a_titles_hotkey_letter_draws_in_the_hotkey_colour() {
+        let bar = bar();
+        let mut buf = Buffer::new(Size::new(40, 6));
+        let mut root = Canvas::new(&mut buf);
+        bar.draw(&mut root.child(rect(0, 0, 40, 1)));
+
+        let theme = Theme::default();
+        // "File" starts at column 1 (column 0 is the leading pad space); 'F' is
+        // its hot-key.
+        assert_eq!(
+            buf.get(Point::new(1, 0)).unwrap().style(),
+            theme
+                .style(Role::MenuBar)
+                .fg(theme.style(Role::MenuHotkey).fg)
+        );
+        // The rest of the title is untouched.
+        assert_eq!(
+            buf.get(Point::new(2, 0)).unwrap().style(),
+            theme.style(Role::MenuBar)
+        );
+    }
+
+    #[test]
+    fn an_items_hotkey_letter_draws_in_the_hotkey_colour_when_enabled() {
+        let mut bar = bar();
+        bar.handle_event(
+            &key(KeyCode::F(10), Modifiers::NONE),
+            &mut Context::new(&CommandSet::new()),
+        ); // File open, item 0 = New (row 2), item 1 = Open... (row 3)
+
+        let mut buf = Buffer::new(Size::new(40, 6));
+        let mut root = Canvas::new(&mut buf);
+        bar.draw_overlay(&mut root);
+
+        let theme = Theme::default();
+        // "New" on row 2 is selected (row 0, highlighted): 'N' still stands out
+        // against the selected background, not the plain bar one.
+        assert_eq!(
+            buf.get(Point::new(2, 2)).unwrap().style(),
+            theme
+                .style(Role::MenuSelected)
+                .fg(theme.style(Role::MenuHotkey).fg)
+        );
+        // "Open..." on row 3 is enabled but not highlighted: 'O' uses the plain
+        // bar background.
         assert_eq!(
             buf.get(Point::new(2, 3)).unwrap().style(),
-            theme.style(Role::MenuBar)
+            theme
+                .style(Role::MenuBar)
+                .fg(theme.style(Role::MenuHotkey).fg)
+        );
+    }
+
+    #[test]
+    fn a_disabled_items_hotkey_letter_is_not_highlighted() {
+        let mut bar = bar();
+        let mut cs = CommandSet::new();
+        cs.disable(CM_NEW); // File item 0 = New, also the row highlighted on open
+        bar.sync_enabled(&cs);
+        bar.handle_event(
+            &key(KeyCode::F(10), Modifiers::NONE),
+            &mut Context::new(&cs),
+        );
+
+        let mut buf = Buffer::new(Size::new(40, 6));
+        let mut root = Canvas::new(&mut buf);
+        bar.draw_overlay(&mut root);
+
+        let theme = Theme::default();
+        // 'N' in "New" reads as plain disabled style, not the hot-key colour.
+        assert_eq!(
+            buf.get(Point::new(2, 2)).unwrap().style(),
+            theme.style(Role::MenuDisabled)
         );
     }
 
