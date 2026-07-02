@@ -16,7 +16,7 @@ those transparent ones is worth having.
 
 The forces:
 
-- **Crate budget (ADR 0001).** Runtime deps are frozen at `crossterm`,
+- **Crate budget ([rvision's ADR 0001](https://github.com/SuzukiStumpy/rvision/blob/main/docs/adr/0001-terminal-backend-crossterm.md)).** Runtime deps are frozen at `crossterm`,
   `unicode-width`, `unicode-segmentation`; anything else needs an ADR. That rules
   out `serde`/`toml` for the format *and* `dirs`/`directories` for the location —
   the two crates one would normally reach for here.

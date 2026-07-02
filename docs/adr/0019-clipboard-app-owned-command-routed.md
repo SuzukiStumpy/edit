@@ -12,7 +12,7 @@ open question is *where the clipboard lives* and *how an edit reaches it*.
 
 Two forces pull on the answer:
 
-- **No shared references between views (ADR 0003).** A view never holds a pointer
+- **No shared references between views ([rvision's ADR 0003](https://github.com/SuzukiStumpy/rvision/blob/main/docs/adr/0003-view-model-trait-objects-messages.md)).** A view never holds a pointer
   to a sibling or to app state; it emits a `Command` that bubbles up the owner
   chain. So the editor cannot simply borrow a clipboard.
 - **MDI is coming (Phase 8).** Several editor windows will share *one* clipboard —

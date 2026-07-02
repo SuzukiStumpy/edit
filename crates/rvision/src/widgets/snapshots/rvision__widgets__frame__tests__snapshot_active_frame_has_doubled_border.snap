@@ -1,9 +1,0 @@
----
-source: crates/rvision/src/widgets/frame.rs
-expression: "render(&frame, 20, 5)"
----
-╔═[■] Untitled ═[↑]╗
-║                  ║
-║                  ║
-║                  ║
-╚══════════════════╝

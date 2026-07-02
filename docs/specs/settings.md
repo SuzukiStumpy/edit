@@ -2,7 +2,7 @@
 
 - **Status:** Done
 - **Phase:** 10 (Settings persistence)
-- **Related ADRs:** 0025 (format + location), 0001/0013 (crate budget, test seams),
+- **Related ADRs:** 0025 (format + location), rvision's ADR 0001/this repo's ADR 0013 (crate budget, test seams),
   0018 (the editor app owns its state concretely)
 
 ## Purpose
@@ -86,7 +86,7 @@ Keys: `tab_width` (usize), `find.case_sensitive` / `find.whole_word` (bool:
 ## Location (ADR 0025)
 
 File name `config`, under a per-OS directory, resolved by hand from env vars (no
-`dirs` crate — crate budget, ADR 0001):
+`dirs` crate — crate budget, rvision's ADR 0001):
 
 | OS | Directory |
 |----|-----------|

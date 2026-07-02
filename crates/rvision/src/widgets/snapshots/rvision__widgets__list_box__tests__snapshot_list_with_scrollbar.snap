@@ -1,7 +1,0 @@
----
-source: crates/rvision/src/widgets/list_box.rs
-expression: "render(&lb, 12, 3)"
----
-alpha      ▲
-beta       █
-gamma      ▼

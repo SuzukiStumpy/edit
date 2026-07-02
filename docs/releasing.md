@@ -10,17 +10,17 @@ On every push to `main`, [release-please](https://github.com/googleapis/release-
 reads the commits since the last release and keeps a single open **release PR**
 that bumps the version and updates `CHANGELOG.md` — it builds nothing. Merging that
 PR tags `vX.Y.Z`, cuts the GitHub Release, and triggers the cross-platform build
-that attaches the binaries. `edit` and `rvision` share one workspace version and
-move in lockstep.
+that attaches the binaries. `rvision` moved to its own repository (and its own
+release process, once it has one) after `edit` v1.0.0; this covers `edit` alone.
 
 ## Day to day
 
-Write Conventional Commits, scoped per crate, and the version takes care of itself:
+Write Conventional Commits and the version takes care of itself:
 
 | Commit subject | Effect on the next version |
 |----------------|----------------------------|
-| `fix(edit): …` / `fix(rvision): …` | patch (`0.1.0` → `0.1.1`) |
-| `feat(edit): …` / `feat(rvision): …` | minor (`0.1.0` → `0.2.0`) |
+| `fix(edit): …` | patch (`0.1.0` → `0.1.1`) |
+| `feat(edit): …` | minor (`0.1.0` → `0.2.0`) |
 | `feat(edit)!: …` or a `BREAKING CHANGE:` footer | minor while pre-1.0, major thereafter |
 | `docs:`, `test:`, `chore:`, `refactor:`, … | no changelog entry, no bump |
 

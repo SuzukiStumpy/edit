@@ -15,7 +15,7 @@ elsewhere).
 
 Define a **`TextBuffer` trait** (insert/delete, line access, grapheme
 navigation) and implement it first as a **line array** — `Vec<String>`, one
-UTF-8 line per element, graphemes via `unicode-segmentation` (ADR 0006). A gap
+UTF-8 line per element, graphemes via `unicode-segmentation` ([rvision's ADR 0006](https://github.com/SuzukiStumpy/rvision/blob/main/docs/adr/0006-unicode-full-now.md)). A gap
 buffer or rope can be added later behind the same trait without touching the
 editor view.
 

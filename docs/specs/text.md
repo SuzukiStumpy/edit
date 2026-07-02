@@ -6,7 +6,7 @@
   lines, cursor positions, a reversible-edit/undo journal — so it lives in the
   application, keeping `rvision` free of editor concepts (CLAUDE.md). TurboVision
   did the same: the editor was a separate unit, not part of the view core.
-- **Related ADRs:** 0006 (full Unicode), 0008 (line-array `TextBuffer`),
+- **Related ADRs:** rvision's ADR 0006 (full Unicode), 0008 (line-array `TextBuffer`),
   0011 (reversible `Edit`)
 
 ## Purpose
@@ -66,7 +66,7 @@ impl LineArray { fn new() -> Self; }     // also From<&str>, Default
   splits on `'\n'`; a trailing `'\n'` yields a trailing empty line (a file ending
   in a newline). `""` parses to a single empty line.
 - **Columns are graphemes,** not bytes or scalars (`unicode-segmentation`,
-  ADR 0006). `column == line_graphemes(line)` is the end-of-line position (valid).
+  rvision's ADR 0006). `column == line_graphemes(line)` is the end-of-line position (valid).
 - **Insert** splits the target line at `at.column`; embedded `'\n'`s in `text`
   introduce new lines (head+first … middle … last+tail).
 - **Delete** removes the span starting at `at` whose shape is given by `text`

@@ -28,8 +28,8 @@ The binaries are unsigned. On Linux/macOS make the file executable
 
 ```
 crates/
-  rvision/   the TurboVision-style UI framework (library)
-  edit/      the editor binary, built on rvision
+  edit/      the editor binary, built on rvision (a git dependency —
+             see https://github.com/SuzukiStumpy/rvision)
 docs/
   roadmap.md            phased delivery plan
   adr/                  architecture decision records

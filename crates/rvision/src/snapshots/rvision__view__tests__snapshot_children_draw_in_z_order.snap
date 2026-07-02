@@ -1,8 +1,0 @@
----
-source: crates/rvision/src/view.rs
-expression: buf.to_text()
----
-11111111
-11222211
-11222211
-11111111
