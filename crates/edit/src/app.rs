@@ -296,12 +296,16 @@ fn build_menu_bar(size: Size, theme: &Theme, recent: &[PathBuf]) -> MenuBar {
         MenuItem::new("New", CM_NEW),
         MenuItem::new("Open...", CM_OPEN),
         MenuItem::new("Save", CM_SAVE).with_shortcut("F2"),
-        MenuItem::new("Save As...", CM_SAVE_AS),
+        MenuItem::new("Save As...", CM_SAVE_AS).with_hotkey('a'),
     ];
     for (i, path) in recent.iter().take(MAX_RECENT).enumerate() {
         file.push(MenuItem::new(&recent_label(i, path), recent_command(i)));
     }
-    file.push(MenuItem::new("Exit", CM_QUIT).with_shortcut("Alt-X"));
+    file.push(
+        MenuItem::new("Exit", CM_QUIT)
+            .with_shortcut("Alt-X")
+            .with_hotkey('x'),
+    );
 
     MenuBar::new(
         regions(size).menu,
@@ -312,7 +316,9 @@ fn build_menu_bar(size: Size, theme: &Theme, recent: &[PathBuf]) -> MenuBar {
                 vec![
                     MenuItem::new("Undo", CM_UNDO).with_shortcut("Ctrl-Z"),
                     MenuItem::new("Redo", CM_REDO).with_shortcut("Ctrl-Y"),
-                    MenuItem::new("Cut", CM_CUT).with_shortcut("Ctrl-X"),
+                    MenuItem::new("Cut", CM_CUT)
+                        .with_shortcut("Ctrl-X")
+                        .with_hotkey('t'),
                     MenuItem::new("Copy", CM_COPY).with_shortcut("Ctrl-C"),
                     MenuItem::new("Paste", CM_PASTE).with_shortcut("Ctrl-V"),
                     MenuItem::new("Settings...", CM_SETTINGS),
@@ -322,7 +328,9 @@ fn build_menu_bar(size: Size, theme: &Theme, recent: &[PathBuf]) -> MenuBar {
                 "Search",
                 vec![
                     MenuItem::new("Find...", CM_FIND).with_shortcut("Ctrl-F"),
-                    MenuItem::new("Find Next", CM_FIND_NEXT).with_shortcut("F3"),
+                    MenuItem::new("Find Next", CM_FIND_NEXT)
+                        .with_shortcut("F3")
+                        .with_hotkey('n'),
                     MenuItem::new("Replace...", CM_REPLACE),
                     MenuItem::new("Go to Line...", CM_GOTO).with_shortcut("Ctrl-G"),
                 ],
@@ -335,7 +343,9 @@ fn build_menu_bar(size: Size, theme: &Theme, recent: &[PathBuf]) -> MenuBar {
                     MenuItem::new("Zoom", CM_ZOOM).with_shortcut("F5"),
                     MenuItem::new("Cascade", CM_CASCADE),
                     MenuItem::new("Tile", CM_TILE),
-                    MenuItem::new("Close", CM_CLOSE).with_shortcut("Alt-F3"),
+                    MenuItem::new("Close", CM_CLOSE)
+                        .with_shortcut("Alt-F3")
+                        .with_hotkey('l'),
                 ],
             ),
             Menu::new(
@@ -1878,9 +1888,35 @@ mod tests {
         let mut ed = app();
         keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File
         assert!(ed.menu_is_open());
-        let posted = keydown(&mut ed, KeyCode::Char('a'), Modifiers::NONE);
+        // 'z' matches none of the File menu's hot-keys, so nothing posts — but it
+        // is still consumed by the (modal) menu, not leaked to the editor.
+        let posted = keydown(&mut ed, KeyCode::Char('z'), Modifiers::NONE);
         assert!(posted.is_empty());
         assert!(!ed.is_modified(), "the keystroke never reached the editor");
+    }
+
+    #[test]
+    fn hotkey_letters_disambiguate_items_that_share_a_first_letter() {
+        // Cut/Copy, Save/Save As..., Find.../Find Next, and Cascade/Close all
+        // start with the same letter; build_menu_bar overrides one of each pair
+        // so pressing its hot-key routes to the right item, not the first match.
+        let mut ed = ed_with_selection();
+
+        keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit
+        let posted = keydown(&mut ed, KeyCode::Char('t'), Modifiers::NONE); // Cut, not Copy
+        assert_eq!(posted, vec![CM_CUT]);
+
+        keydown(&mut ed, KeyCode::Char('f'), Modifiers::ALT); // open File
+        let posted = keydown(&mut ed, KeyCode::Char('a'), Modifiers::NONE); // Save As, not Save
+        assert_eq!(posted, vec![CM_SAVE_AS]);
+
+        keydown(&mut ed, KeyCode::Char('s'), Modifiers::ALT); // open Search
+        let posted = keydown(&mut ed, KeyCode::Char('n'), Modifiers::NONE); // Find Next, not Find...
+        assert_eq!(posted, vec![CM_FIND_NEXT]);
+
+        keydown(&mut ed, KeyCode::Char('w'), Modifiers::ALT); // open Window
+        let posted = keydown(&mut ed, KeyCode::Char('l'), Modifiers::NONE); // Close, not Cascade
+        assert_eq!(posted, vec![CM_CLOSE]);
     }
 
     #[test]
