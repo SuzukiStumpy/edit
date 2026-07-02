@@ -387,9 +387,9 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
     to a fresh Untitled — the desktop can be emptied; New/Open spawn a window
     again, and document-dependent commands/keys quietly no-op while it is empty.
 - Verify on Windows and macOS; iron out terminal quirks. *Partial:* manually
-  verified on Linux and Intel macOS; Windows x86_64 and Apple-silicon macOS still
+  verified on Linux, Windows x86_64, and Intel macOS; Apple-silicon macOS still
   unverified (CI builds all four — 9dc13a5 — but the TUI/terminal-quirk pass on
-  those two is pending hardware).
+  that platform is pending hardware).
 - **Clipboard ↔ host ✅** — *out:* Cut/Copy mirror to the host clipboard (works
   over SSH) via `Backend::set_clipboard` + a hand-rolled Base64 `osc52` encoder
   (no crate); OSC 52 read-back is left behind the seam as fragile/terminal-gated
