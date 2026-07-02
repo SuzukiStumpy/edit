@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/SuzukiStumpy/edit/compare/v1.0.0...v1.0.1) (2026-07-02)
+
+
+### Bug Fixes
+
+* **edit:** move the rvision local-dev patch out of the committed manifest ([268d0f7](https://github.com/SuzukiStumpy/edit/commit/268d0f72fde0550ab60cf3ca2a91973c14bcd183))
+
 ## [1.0.0](https://github.com/SuzukiStumpy/edit/compare/v0.3.0...v1.0.0) (2026-07-02)
 
 
