@@ -15,8 +15,9 @@ or for Unicode data tables.
 ## Layout
 
 - `crates/edit/` — the editor binary. Depends on `rvision` as a git dependency
-  (see its `Cargo.toml`); a root `[patch]` points it at a local sibling
-  checkout during active co-development.
+  (see its `Cargo.toml`); copy `.cargo/config.toml.example` to
+  `.cargo/config.toml` (git-ignored) to `[patch]` it to a local sibling
+  checkout during active co-development, without affecting CI.
 - `docs/adr/` — one numbered Architecture Decision Record per major decision.
   Decisions about the framework itself now live in `rvision`'s own `docs/adr/`;
   citations here to a moved ADR link across to it.

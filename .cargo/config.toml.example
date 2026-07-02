@@ -1,0 +1,8 @@
+# Copy this to .cargo/config.toml (git-ignored) to build edit against a local
+# rvision checkout instead of the pinned git rev in crates/edit/Cargo.toml —
+# no push-then-bump-rev round-trip while developing both repos together.
+#
+# A [patch] here only affects your own machine: .cargo/config.toml isn't
+# committed, so CI and anyone else always resolve the real pinned rev.
+[patch."https://github.com/SuzukiStumpy/rvision"]
+rvision = { path = "../rvision" }

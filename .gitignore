@@ -16,3 +16,7 @@
 
 # Local plugin storage
 .VSCodeCounter/
+
+# Local Cargo overrides (e.g. [patch] to a sibling rvision checkout) — see
+# .cargo/config.toml.example. Machine-specific; never committed.
+/.cargo/config.toml

@@ -36,9 +36,6 @@ unicode-segmentation = "1"
 # Dev-only — snapshot testing.
 insta = "1"
 
-[patch."https://github.com/SuzukiStumpy/rvision"]
-rvision = { path = "../rvision" }
-
 # Optimised profile keeps the released editor snappy; nothing exotic.
 [profile.release]
 opt-level = 3
