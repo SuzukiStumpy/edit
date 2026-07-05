@@ -18,7 +18,9 @@ use rvision::buffer::Buffer;
 use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
-use rvision::command::{CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet};
+use rvision::command::{
+    Accelerator, CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet,
+};
 use rvision::event::{
     Event, EventResult, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
 };
@@ -371,22 +373,19 @@ impl EditorApp {
                 StatusItem::new(
                     "F1",
                     "Help",
-                    KeyEvent::new(KeyCode::F(1), Modifiers::NONE),
-                    CM_HELP,
+                    Accelerator::new(KeyEvent::new(KeyCode::F(1), Modifiers::NONE), CM_HELP),
                 ),
                 StatusItem::new(
                     "F2",
                     "Save",
-                    KeyEvent::new(KeyCode::F(2), Modifiers::NONE),
-                    CM_SAVE,
+                    Accelerator::new(KeyEvent::new(KeyCode::F(2), Modifiers::NONE), CM_SAVE),
                 ),
                 // F3 is the editor's Find Next (consumed before the status line),
                 // so Open lives on the File menu; no F3 accelerator here.
                 StatusItem::new(
                     "Alt-X",
                     "Exit",
-                    KeyEvent::new(KeyCode::Char('x'), Modifiers::ALT),
-                    CM_QUIT,
+                    Accelerator::new(KeyEvent::new(KeyCode::Char('x'), Modifiers::ALT), CM_QUIT),
                 ),
             ],
             theme.style(Role::StatusBar),
@@ -623,10 +622,13 @@ impl EditorApp {
         let lx = pos.x - r.origin().x;
         let ly = pos.y - r.origin().y;
         if ly == 0 {
-            if Frame::close_span(w).is_some_and(|s| s.contains(&lx)) {
+            // `edit`'s own windows never draw a help glyph (ADR 0021's `F1`
+            // glyph is a `rvision::widgets::Window` feature this bespoke
+            // chrome doesn't use), so the spans never shift for one.
+            if Frame::close_span(w, false).is_some_and(|s| s.contains(&lx)) {
                 return ChromeHit::Close;
             }
-            if Frame::zoom_span(w).is_some_and(|s| s.contains(&lx)) {
+            if Frame::zoom_span(w, false).is_some_and(|s| s.contains(&lx)) {
                 return ChromeHit::Zoom;
             }
         }
@@ -1038,6 +1040,22 @@ impl EditorApp {
         EventResult::Consumed
     }
 
+    /// Resolves a status-line hot-key to its command. `StatusLine` is now a pure
+    /// display widget (its accelerators are meant to be bound into
+    /// `rvision::widgets::Desktop`'s global table, ADR 0028) — `EditorApp` runs
+    /// its own bespoke loop instead of `Desktop` (ADR 0018), so it keeps this
+    /// tiny table itself rather than gaining the framework's accelerator
+    /// dispatch. Kept in sync with the `StatusItem`s built in [`Self::new`] by
+    /// hand; there are only three.
+    fn status_key_command(key: &KeyEvent) -> Option<Command> {
+        match (key.code, key.modifiers) {
+            (KeyCode::F(1), Modifiers::NONE) => Some(CM_HELP),
+            (KeyCode::F(2), Modifiers::NONE) => Some(CM_SAVE),
+            (KeyCode::Char('x'), Modifiers::ALT) => Some(CM_QUIT),
+            _ => None,
+        }
+    }
+
     // --- file operations (terminal-free, unit-tested) ---
 
     /// Resets the active document to empty and unsaved.
@@ -1203,7 +1221,9 @@ impl EditorApp {
                     result = self.doc_mut().editor.handle_event(event, &mut ctx);
                 }
                 if result == EventResult::Ignored {
-                    self.status_line.handle_event(event, &mut ctx);
+                    if let Some(command) = Self::status_key_command(key) {
+                        ctx.post(command);
+                    }
                 }
             }
             Event::Idle | Event::Broadcast(_) => {
@@ -1531,8 +1551,8 @@ fn open_help<T: Backend + EventSource>(
     theme: &Theme,
     initial: Option<&str>,
 ) -> io::Result<()> {
-    let mut viewer = HelpViewer::new(HELP_TEXT, initial, theme);
-    app.exec_view(&mut *ed, &mut viewer)?;
+    let mut window = HelpViewer::window(HELP_TEXT, initial, theme);
+    app.exec_view(&mut *ed, &mut window)?;
     Ok(())
 }
 
@@ -1578,9 +1598,12 @@ fn open_settings<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = SettingsDialog::new(theme, ed.settings());
-    match app.exec_view(&mut *ed, &mut dialog)? {
-        CM_OK => ed.apply_settings_from_dialog(dialog.tab_width(), dialog.recent_limit(), theme),
+    let (mut window, handle) = SettingsDialog::window(theme, ed.settings());
+    match app.exec_view(&mut *ed, &mut window)? {
+        CM_OK => {
+            let dialog = handle.borrow();
+            ed.apply_settings_from_dialog(dialog.tab_width(), dialog.recent_limit(), theme)
+        }
         CM_DEFAULTS => ed.reset_settings_to_defaults(theme),
         _ => {}
     }
@@ -1593,21 +1616,23 @@ fn replace<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = ReplaceDialog::new(theme).with_options(
+    let (mut window, handle) = ReplaceDialog::window(
+        theme,
         ed.settings().find_case_sensitive,
         ed.settings().find_whole_word,
     );
-    if app.exec_view(&mut *ed, &mut dialog)? != CM_OK {
+    if app.exec_view(&mut *ed, &mut window)? != CM_OK {
         return Ok(());
     }
-    let query = dialog.query();
+    let (query, replacement) = {
+        let dialog = handle.borrow();
+        (dialog.query(), dialog.replacement())
+    };
     ed.remember_find_options(query.case_sensitive, query.whole_word);
     if query.needle.is_empty() {
         return Ok(());
     }
-    let count = ed
-        .active_editor_mut()
-        .replace_all(&query, &dialog.replacement());
+    let count = ed.active_editor_mut().replace_all(&query, &replacement);
     let report = match count {
         0 => "Text not found.".to_string(),
         1 => "Replaced 1 occurrence.".to_string(),
@@ -1622,15 +1647,19 @@ fn find<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = FindDialog::new(theme).with_options(
+    let (mut window, handle) = FindDialog::window(
+        theme,
         ed.settings().find_case_sensitive,
         ed.settings().find_whole_word,
     );
-    if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
-        let query = dialog.query();
+    if app.exec_view(&mut *ed, &mut window)? == CM_OK {
+        let (query, backward) = {
+            let dialog = handle.borrow();
+            (dialog.query(), dialog.backward())
+        };
         ed.remember_find_options(query.case_sensitive, query.whole_word);
         if !query.needle.is_empty() {
-            ed.active_editor_mut().find(query, dialog.backward());
+            ed.active_editor_mut().find(query, backward);
         }
     }
     Ok(())
@@ -1642,9 +1671,10 @@ fn go_to_line<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = GoToLine::new(theme);
-    if app.exec_view(&mut *ed, &mut dialog)? == CM_OK {
-        if let Some(line) = dialog.line() {
+    let (mut window, handle) = GoToLine::window(theme);
+    if app.exec_view(&mut *ed, &mut window)? == CM_OK {
+        let line = handle.borrow().line();
+        if let Some(line) = line {
             ed.active_editor_mut().go_to_line(line);
         }
     }
@@ -1708,11 +1738,11 @@ fn open<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut dialog = FileDialog::open("Open File", ed.start_dir(), theme);
-    if app.exec_view(&mut *ed, &mut dialog)? != CM_OK {
+    let (mut window, result) = FileDialog::open("Open File", ed.start_dir(), theme);
+    if app.exec_view(&mut *ed, &mut window)? != CM_OK {
         return Ok(());
     }
-    let path = dialog.path();
+    let path = result.path();
     ed.new_window(theme);
     match ed.open_file(path) {
         Ok(lossy) => {
@@ -1799,11 +1829,11 @@ fn save_as<T: Backend + EventSource>(
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<bool> {
-    let mut dialog = FileDialog::save("Save As", ed.start_dir(), theme);
-    if app.exec_view(&mut *ed, &mut dialog)? != CM_OK {
+    let (mut window, result) = FileDialog::save("Save As", ed.start_dir(), theme);
+    if app.exec_view(&mut *ed, &mut window)? != CM_OK {
         return Ok(false);
     }
-    let path = dialog.path();
+    let path = result.path();
     write_to(app, ed, theme, path)
 }
 

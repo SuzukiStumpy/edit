@@ -2,10 +2,10 @@
 #
 # `rvision` (the TurboVision-style terminal UI framework `edit` is built on)
 # used to be a workspace member here; it now lives in its own repository
-# (https://github.com/SuzukiStumpy/rvision) and is pulled in as a git
-# dependency by crates/edit/Cargo.toml. This stays a (single-member)
-# workspace rather than un-workspacing entirely, for consistency and room to
-# grow.
+# (https://github.com/SuzukiStumpy/rvision), published to crates.io, and is
+# pulled in as an ordinary version dependency by crates/edit/Cargo.toml. This
+# stays a (single-member) workspace rather than un-workspacing entirely, for
+# consistency and room to grow.
 #
 # See docs/roadmap.md for the phased plan and docs/adr/ for the decisions
 # behind this layout (ADR 0012).

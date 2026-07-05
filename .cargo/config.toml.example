@@ -1,8 +1,11 @@
 # Copy this to .cargo/config.toml (git-ignored) to build edit against a local
-# rvision checkout instead of the pinned git rev in crates/edit/Cargo.toml —
-# no push-then-bump-rev round-trip while developing both repos together.
+# rvision checkout instead of the pinned crates.io version in
+# crates/edit/Cargo.toml — no publish-then-bump-version round-trip while
+# developing both repos together.
 #
 # A [patch] here only affects your own machine: .cargo/config.toml isn't
-# committed, so CI and anyone else always resolve the real pinned rev.
-[patch."https://github.com/SuzukiStumpy/rvision"]
+# committed, so CI and anyone else always resolve the real pinned version.
+# Keyed on `crates-io` (not a git URL) since crates/edit/Cargo.toml now
+# depends on the published crate, not a git rev.
+[patch.crates-io]
 rvision = { path = "../rvision" }

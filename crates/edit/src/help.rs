@@ -3,9 +3,11 @@
 //! The viewer is an editor concept (like the `dialogs` modals): it composes the
 //! generic `rvision` help parts — the [`HelpContents`] model and the
 //! [`HelpPane`] page renderer — with a [`ListBox`] of topic titles, run
-//! modally via [`exec_view`](rvision::app::Application::exec_view) (ADR 0017/0018). The
-//! framework's own (desktop-window) viewer is deferred until the windowing
-//! question is settled (see the roadmap Backlog); this modal needs none of that.
+//! modally via [`exec_view`](rvision::app::Application::exec_view), boxed as a
+//! [`Window`]'s interior since `Modal` is gone (ADR 0016/0017/0018). The
+//! framework now ships its own desktop-window viewer
+//! ([`rvision::widgets::HelpWindow`]) — replacing this modal with it is a
+//! migration candidate, not done here (see the roadmap Backlog).
 //!
 //! Content lives in `help.txt`, compiled into the binary with `include_str!`
 //! (ADR 0023). A future authoring app would emit the same format.
@@ -13,16 +15,23 @@
 use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
-use rvision::command::{CM_CANCEL, CM_OK, Command};
+use rvision::command::CM_CANCEL;
 use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::help::HelpContents;
 use rvision::theme::{Role, Theme};
-use rvision::view::{Context, Modal, View};
-use rvision::widgets::{HelpPane, ListBox};
+use rvision::view::{Context, View};
+use rvision::widgets::{HelpPane, ListBox, Window};
+
+use crate::dialogs::modal_window;
 
 /// The editor's help content, baked into the binary (ADR 0023).
 pub const HELP_TEXT: &str = include_str!("help.txt");
+
+/// The viewer's outer size — see
+/// [`GoToLine::SIZE`](crate::dialogs::go_to_line::SIZE)'s doc comment for why
+/// this differs from [`HelpViewer`]'s own content-only [`View::bounds`].
+const SIZE: Size = Size::new(72, 20);
 
 const FOCUS_LIST: usize = 0;
 const FOCUS_PAGE: usize = 1;
@@ -38,7 +47,6 @@ pub struct HelpViewer {
     size: Size,
     style: Style,
     frame_style: Style,
-    shadow_style: Style,
     contents: HelpContents,
     list: ListBox,
     pane: HelpPane,
@@ -50,14 +58,13 @@ impl HelpViewer {
     /// `initial` if given and known, else the home topic.
     pub fn new(source: &str, initial: Option<&str>, theme: &Theme) -> Self {
         let contents = HelpContents::parse(source);
-        let size = Size::new(72, 20);
-        let (interior_w, interior_h) = (size.width - 2, size.height - 2);
-        let content_h = interior_h - 1; // bottom row is the hint
+        let size = Size::new(SIZE.width - 2, SIZE.height - 2);
+        let content_h = size.height - 1; // bottom row is the hint
         let titles: Vec<String> = contents.titles().iter().map(|s| s.to_string()).collect();
 
         let mut list = ListBox::new(local_rect(0, 0, LIST_W, content_h), titles, theme);
         let pane = HelpPane::new(
-            local_rect(LIST_W + 1, 0, interior_w - (LIST_W + 1), content_h),
+            local_rect(LIST_W + 1, 0, size.width - (LIST_W + 1), content_h),
             theme,
         );
         if let Some(id) = initial {
@@ -70,7 +77,6 @@ impl HelpViewer {
             size,
             style: theme.style(Role::DialogBackground),
             frame_style: theme.style(Role::WindowFrame),
-            shadow_style: theme.style(Role::Shadow),
             contents,
             list,
             pane,
@@ -79,6 +85,14 @@ impl HelpViewer {
         viewer.apply_focus();
         viewer.sync_page();
         viewer
+    }
+
+    /// Builds a fresh viewer wrapped in a ready-to-run [`Window`] (the
+    /// returned handle is unneeded — the viewer reports nothing back — but
+    /// `modal_window` is the shared shape every editor modal now runs
+    /// through).
+    pub fn window(source: &str, initial: Option<&str>, theme: &Theme) -> Window {
+        modal_window("Help", SIZE, theme, Self::new(source, initial, theme)).0
     }
 
     /// Shows the currently-selected topic in the page pane.
@@ -96,11 +110,6 @@ impl HelpViewer {
         self.pane.set_focused(self.focus == FOCUS_PAGE);
     }
 
-    /// The interior rectangle (inset one cell on every side), dialog-local.
-    fn interior(&self) -> Rect {
-        local_rect(1, 1, self.size.width - 2, self.size.height - 2)
-    }
-
     /// Routes a key to the focused pane; live-updates the page when the list
     /// selection moves.
     fn route_key(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
@@ -116,12 +125,14 @@ impl HelpViewer {
         }
     }
 
-    /// Routes a mouse event (dialog-local) to the pane under the pointer. A left
-    /// press also moves focus there; the wheel/scroll-bar act without stealing
-    /// focus. Live-updates the page on a list click.
+    /// Routes a mouse event to the pane under the pointer. A left press also
+    /// moves focus there; the wheel/scroll-bar act without stealing focus.
+    /// Live-updates the page on a list click. `m.pos` already arrives in this
+    /// view's own local coordinates — the border/title belongs to the
+    /// [`Window`] built around this viewer, which translates into it before
+    /// forwarding (ADR 0016).
     fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
-        let io = self.interior().origin();
-        let p = m.pos.offset(-io.x, -io.y);
+        let p = m.pos;
         let is_press = matches!(m.kind, MouseKind::Down(MouseButton::Left));
         let target = if self.list.bounds().contains(p) {
             FOCUS_LIST
@@ -166,45 +177,28 @@ impl View for HelpViewer {
         Rect::from_origin_size(Point::new(0, 0), self.size)
     }
 
-    fn drop_shadow(&self) -> Option<Style> {
-        Some(self.shadow_style) // the classic TV shadow, painted by the compositor (ADR 0020)
-    }
-
     fn draw(&self, canvas: &mut Canvas) {
-        let area = canvas.bounds();
-        canvas.fill(area, &Cell::blank(self.style));
-        canvas.draw_box(area, self.style);
-        let title = " Help ";
-        let x = ((area.width() - title.chars().count() as i16) / 2).max(1);
-        canvas.put_str(Point::new(x, 0), title, self.style);
-
-        let interior = self.interior();
-        if interior.is_empty() {
-            return;
-        }
-        let mut sub = canvas.child(interior);
-
         {
-            let mut list_canvas = sub.child(self.list.bounds());
+            let mut list_canvas = canvas.child(self.list.bounds());
             self.list.draw(&mut list_canvas);
         }
 
         // The vertical separator between the panes.
         let content_h = self.list.bounds().height();
         for y in 0..content_h {
-            sub.set(
+            canvas.set(
                 Point::new(LIST_W, y),
                 Cell::from_char('│', self.frame_style),
             );
         }
 
         {
-            let mut pane_canvas = sub.child(self.pane.bounds());
+            let mut pane_canvas = canvas.child(self.pane.bounds());
             self.pane.draw(&mut pane_canvas);
         }
 
         let hint = "↑↓ Topic   Tab Switch pane   Esc Close";
-        sub.put_str(Point::new(0, content_h), hint, self.style);
+        canvas.put_str(Point::new(0, content_h), hint, self.style);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
@@ -234,16 +228,6 @@ impl View for HelpViewer {
 
     fn focusable(&self) -> bool {
         true
-    }
-}
-
-impl Modal for HelpViewer {
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn ends_on(&self, command: Command) -> bool {
-        command == CM_CANCEL || command == CM_OK
     }
 }
 
@@ -352,18 +336,24 @@ Ctrl+V pastes the editor clipboard.";
     fn esc_ends_the_modal() {
         let mut v = viewer(None);
         assert_eq!(press(&mut v, KeyCode::Esc), vec![Event::Command(CM_CANCEL)]);
-        assert!(v.ends_on(CM_CANCEL));
+        let window = HelpViewer::window(SRC, None, &Theme::default());
+        assert!(window.ends_on(CM_CANCEL));
     }
 
     // --- the shipped content (a compile-in safety net, ADR 0023) ---
 
     fn topic_text(t: &rvision::help::HelpTopic) -> String {
-        use rvision::help::Block;
+        use rvision::help::{Block, Span};
         let mut s = String::new();
         for block in &t.body {
             match block {
-                Block::Paragraph(p) => {
-                    s.push_str(p);
+                Block::Paragraph(spans) => {
+                    for span in spans {
+                        match span {
+                            Span::Text(text) => s.push_str(text),
+                            Span::Link { label, .. } => s.push_str(label),
+                        }
+                    }
                     s.push('\n');
                 }
                 Block::Preformatted(lines) => {
@@ -448,12 +438,12 @@ Ctrl+V pastes the editor clipboard.";
         // Move focus to the page first, then click a list row to come back.
         press(&mut v, KeyCode::Tab);
         assert_eq!(v.focus, FOCUS_PAGE);
-        // Row 2 of the list = "Clipboard"; interior origin is (1,1), list at (0,0).
+        // Row 2 of the list = "Clipboard"; the list itself sits at (0, 0).
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
         let click = Event::Mouse(MouseEvent {
             kind: MouseKind::Down(MouseButton::Left),
-            pos: Point::new(3, 1 + 2),
+            pos: Point::new(2, 2),
             modifiers: Modifiers::NONE,
         });
         v.handle_event(&click, &mut ctx);
