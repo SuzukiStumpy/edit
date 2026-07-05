@@ -12,7 +12,7 @@ name = "edit"
 path = "src/main.rs"
 
 [dependencies]
-rvision = "2.0.1"
+rvision = "^2.0.1"
 unicode-segmentation.workspace = true      # Phase 1 — grapheme navigation in the text model (rvision's ADR 0006, this repo's ADR 0008)
 
 [dev-dependencies]
