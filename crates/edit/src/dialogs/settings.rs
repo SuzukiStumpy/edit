@@ -7,17 +7,26 @@
 //! transparent ones — to their defaults, which is why it is a distinct ending
 //! command ([`CM_DEFAULTS`]) the driver acts on rather than just refilling fields.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use rvision::canvas::Canvas;
-use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{CM_CANCEL, CM_OK, CM_USER, Command};
 use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
-use rvision::view::{Context, Modal, View};
-use rvision::widgets::{Button, InputLine};
+use rvision::view::{Context, View};
+use rvision::widgets::{Button, InputLine, Window};
 
 use crate::settings::Settings;
+
+use super::modal_window;
+
+/// The dialog's outer size — see [`GoToLine::SIZE`](super::go_to_line::SIZE)'s
+/// doc comment for why this differs from [`SettingsDialog`]'s own
+/// content-only [`View::bounds`].
+pub(crate) const SIZE: Size = Size::new(50, 11);
 
 /// "Reset to defaults" — restore every preference to its default. A bespoke
 /// ending command (not `CM_OK`/`CM_CANCEL`) so the driver can tell it apart and
@@ -50,9 +59,8 @@ impl SettingsDialog {
     /// Builds the dialog, pre-filling the fields with the current settings (the
     /// user backspaces to edit — `InputLine` has no select-all).
     pub fn new(theme: &Theme, current: &Settings) -> Self {
-        let size = Size::new(50, 11);
-        let iw = size.width - 2;
-        let ih = size.height - 2;
+        let size = Size::new(SIZE.width - 2, SIZE.height - 2);
+        let (iw, ih) = (size.width, size.height);
         let mut dialog = Self {
             size,
             style: theme.style(Role::DialogBackground),
@@ -66,6 +74,19 @@ impl SettingsDialog {
         };
         dialog.apply_focus();
         dialog
+    }
+
+    /// Builds a fresh dialog seeded from `current`, wrapped in a ready-to-run
+    /// [`Window`], plus the handle to read
+    /// [`tab_width`](Self::tab_width)/[`recent_limit`](Self::recent_limit)
+    /// back through once
+    /// [`exec_view`](rvision::app::Application::exec_view) returns `CM_OK`.
+    pub fn window(theme: &Theme, current: &Settings) -> (Window, Rc<RefCell<Self>>) {
+        let (window, handle) = modal_window("Settings", SIZE, theme, Self::new(theme, current));
+        // `CM_DEFAULTS` also ends the run (alongside `CM_OK`/`CM_CANCEL`,
+        // already added by `modal_window`) — the driver tells it apart to
+        // reset the transparent settings too.
+        (window.also_ends_on(CM_DEFAULTS), handle)
     }
 
     /// The entered tab width, or `None` if the field is empty or not a number (the
@@ -106,14 +127,6 @@ impl SettingsDialog {
         EventResult::Consumed
     }
 
-    /// The interior rectangle (inset one cell on every side), dialog-local.
-    fn interior(&self) -> Rect {
-        Rect::from_origin_size(
-            Point::new(1, 1),
-            Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
-        )
-    }
-
     /// The controls in focus order, as `&dyn View` for drawing/hit-testing.
     fn controls(&self) -> [&dyn View; FOCUS_COUNT] {
         [&self.tab, &self.mru, &self.ok, &self.defaults, &self.cancel]
@@ -131,11 +144,13 @@ impl SettingsDialog {
         }
     }
 
-    /// Routes a mouse event (dialog-local) to the control under the pointer,
-    /// focusing it on a press — mirroring the key dispatch.
+    /// Routes a mouse event to the control under the pointer, focusing it on
+    /// a press — mirroring the key dispatch. `m.pos` already arrives in this
+    /// view's own local coordinates — the border/title belongs to the
+    /// [`Window`](rvision::widgets::Window) built around this dialog, which
+    /// translates into it before forwarding (ADR 0016).
     fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
-        let io = self.interior().origin();
-        let p = m.pos.offset(-io.x, -io.y);
+        let p = m.pos;
         let bounds: Vec<Rect> = self.controls().iter().map(|c| c.bounds()).collect();
         let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
             return EventResult::Ignored;
@@ -163,22 +178,10 @@ impl View for SettingsDialog {
     }
 
     fn draw(&self, canvas: &mut Canvas) {
-        let area = canvas.bounds();
-        canvas.fill(area, &Cell::blank(self.style));
-        canvas.draw_box(area, self.style);
-        let title = " Settings ";
-        let x = ((area.width() - title.chars().count() as i16) / 2).max(1);
-        canvas.put_str(Point::new(x, 0), title, self.style);
-
-        let interior = self.interior();
-        if interior.is_empty() {
-            return;
-        }
-        let mut sub = canvas.child(interior);
-        sub.put_str(Point::new(0, 0), "Tab width (1-16):", self.style);
-        sub.put_str(Point::new(0, 3), "Recent files shown (0-9):", self.style);
+        canvas.put_str(Point::new(0, 0), "Tab width (1-16):", self.style);
+        canvas.put_str(Point::new(0, 3), "Recent files shown (0-9):", self.style);
         for control in self.controls() {
-            let mut child = sub.child(control.bounds());
+            let mut child = canvas.child(control.bounds());
             control.draw(&mut child);
         }
     }
@@ -209,16 +212,6 @@ impl View for SettingsDialog {
 
     fn focusable(&self) -> bool {
         true
-    }
-}
-
-impl Modal for SettingsDialog {
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn ends_on(&self, command: Command) -> bool {
-        command == CM_OK || command == CM_CANCEL || command == CM_DEFAULTS
     }
 }
 
@@ -303,12 +296,12 @@ mod tests {
     }
 
     #[test]
-    fn ends_on_ok_cancel_and_defaults() {
-        let d = dialog();
-        assert!(Modal::ends_on(&d, CM_OK));
-        assert!(Modal::ends_on(&d, CM_CANCEL));
-        assert!(Modal::ends_on(&d, CM_DEFAULTS));
-        assert!(!Modal::ends_on(&d, Command(CM_USER + 1)));
+    fn window_ends_on_ok_cancel_and_defaults() {
+        let (window, _) = SettingsDialog::window(&Theme::default(), &Settings::default());
+        assert!(window.ends_on(CM_OK));
+        assert!(window.ends_on(CM_CANCEL));
+        assert!(window.ends_on(CM_DEFAULTS));
+        assert!(!window.ends_on(Command(CM_USER + 1)));
     }
 
     fn click(d: &mut SettingsDialog, x: i16, y: i16) -> Vec<Event> {
@@ -328,8 +321,8 @@ mod tests {
     #[test]
     fn clicking_defaults_focuses_and_posts_reset() {
         let mut d = dialog();
-        // Defaults sits at interior-local (14, 8) → dialog-local (15, 9).
-        let posted = click(&mut d, 16, 9);
+        // Defaults sits at (14, 8).
+        let posted = click(&mut d, 15, 8);
         assert_eq!(d.focus, FOCUS_DEFAULTS);
         assert_eq!(posted, vec![Event::Command(CM_DEFAULTS)]);
     }

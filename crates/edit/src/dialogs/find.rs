@@ -1,17 +1,26 @@
 //! The Find dialog: a search field, case / whole-word / direction options, and
 //! Find / Cancel buttons.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use rvision::canvas::Canvas;
-use rvision::cell::Cell;
 use rvision::color::Style;
-use rvision::command::{CM_CANCEL, CM_OK, Command};
+use rvision::command::{CM_CANCEL, CM_OK};
 use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
-use rvision::view::{Context, Modal, View};
-use rvision::widgets::{Button, CheckBox, InputLine};
+use rvision::view::{Context, View};
+use rvision::widgets::{Button, CheckBox, InputLine, Window};
 
 use crate::search::Query;
+
+use super::modal_window;
+
+/// The dialog's outer size — see [`GoToLine::SIZE`](super::go_to_line::SIZE)'s
+/// doc comment for why this differs from [`FindDialog`]'s own content-only
+/// [`View::bounds`].
+pub(crate) const SIZE: Size = Size::new(48, 11);
 
 const FOCUS_INPUT: usize = 0;
 const FOCUS_CASE: usize = 1;
@@ -21,8 +30,9 @@ const FOCUS_FIND: usize = 4;
 const FOCUS_CANCEL: usize = 5;
 const FOCUS_COUNT: usize = 6;
 
-/// A modal Find prompt. After `exec_view` returns `CM_OK`, read
-/// [`query`](FindDialog::query) and [`backward`](FindDialog::backward).
+/// A Find prompt, run modally via `super::modal_window`. Read
+/// [`query`](FindDialog::query) and [`backward`](FindDialog::backward) off the
+/// shared handle after `exec_view` returns `CM_OK`.
 pub struct FindDialog {
     size: Size,
     style: Style,
@@ -38,9 +48,8 @@ pub struct FindDialog {
 impl FindDialog {
     /// Creates the dialog with an empty field and all options off.
     pub fn new(theme: &Theme) -> Self {
-        let size = Size::new(48, 11);
-        let iw = size.width - 2;
-        let ih = size.height - 2;
+        let size = Size::new(SIZE.width - 2, SIZE.height - 2);
+        let (iw, ih) = (size.width, size.height);
         let mut dialog = Self {
             size,
             style: theme.style(Role::DialogBackground),
@@ -56,12 +65,20 @@ impl FindDialog {
         dialog
     }
 
-    /// Builder: seed the case / whole-word checkboxes from the saved Find options
-    /// so the dialog reopens the way the user last left it (ADR 0025).
-    pub fn with_options(mut self, case_sensitive: bool, whole_word: bool) -> Self {
-        self.case.set_checked(case_sensitive);
-        self.word.set_checked(whole_word);
-        self
+    /// Builds a fresh dialog wrapped in a ready-to-run [`Window`], seeded with
+    /// the saved Find options so it reopens the way the user last left it
+    /// (ADR 0025), plus the handle to read [`query`](Self::query)/
+    /// [`backward`](Self::backward) back through once
+    /// [`exec_view`](rvision::app::Application::exec_view) returns `CM_OK`.
+    pub fn window(
+        theme: &Theme,
+        case_sensitive: bool,
+        whole_word: bool,
+    ) -> (Window, Rc<RefCell<Self>>) {
+        let mut dialog = Self::new(theme);
+        dialog.case.set_checked(case_sensitive);
+        dialog.word.set_checked(whole_word);
+        modal_window("Find", SIZE, theme, dialog)
     }
 
     /// The query built from the field and the case/whole-word options.
@@ -118,23 +135,16 @@ impl FindDialog {
         }
     }
 
-    /// The interior rectangle (inset one cell on every side) in local coordinates.
-    fn interior(&self) -> Rect {
-        Rect::from_origin_size(
-            Point::new(1, 1),
-            Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
-        )
-    }
-
-    /// Routes a left-press (in dialog-local coordinates) to the control under the
-    /// pointer, focusing it first. Control bounds are interior-local, so the pointer
-    /// is shifted by the interior origin and then into the control's own coordinates.
+    /// Routes a left-press to the control under the pointer, focusing it
+    /// first. `m.pos` already arrives in this view's own local coordinates —
+    /// the border/title belongs to the [`Window`](rvision::widgets::Window)
+    /// built around this dialog, which translates into it before forwarding
+    /// (ADR 0016).
     fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
         if !matches!(m.kind, MouseKind::Down(MouseButton::Left)) {
             return EventResult::Ignored;
         }
-        let io = self.interior().origin();
-        let p = m.pos.offset(-io.x, -io.y);
+        let p = m.pos;
         let bounds = [
             self.input.bounds(),
             self.case.bounds(),
@@ -167,19 +177,7 @@ impl View for FindDialog {
     }
 
     fn draw(&self, canvas: &mut Canvas) {
-        let area = canvas.bounds();
-        canvas.fill(area, &Cell::blank(self.style));
-        canvas.draw_box(area, self.style);
-        let title = " Find ";
-        let x = ((area.width() - title.chars().count() as i16) / 2).max(1);
-        canvas.put_str(Point::new(x, 0), title, self.style);
-
-        let interior = self.interior();
-        if interior.is_empty() {
-            return;
-        }
-        let mut sub = canvas.child(interior);
-        sub.put_str(Point::new(0, 0), "Find what:", self.style);
+        canvas.put_str(Point::new(0, 0), "Find what:", self.style);
         for control in [
             &self.input as &dyn View,
             &self.case,
@@ -188,7 +186,7 @@ impl View for FindDialog {
             &self.find,
             &self.cancel,
         ] {
-            let mut child = sub.child(control.bounds());
+            let mut child = canvas.child(control.bounds());
             control.draw(&mut child);
         }
     }
@@ -222,16 +220,6 @@ impl View for FindDialog {
     }
 }
 
-impl Modal for FindDialog {
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn ends_on(&self, command: Command) -> bool {
-        command == CM_OK || command == CM_CANCEL
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,13 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn with_options_seeds_the_checkboxes() {
-        let q = FindDialog::new(&Theme::default())
-            .with_options(true, true)
-            .query();
+    fn window_seeds_the_checkboxes_from_the_saved_options() {
+        let (_, handle) = FindDialog::window(&Theme::default(), true, true);
+        let q = handle.borrow().query();
         assert!(q.case_sensitive);
         assert!(q.whole_word);
-        // The default leaves both off.
+        // The default (plain `new`) leaves both off.
         let q = dialog().query();
         assert!(!q.case_sensitive);
         assert!(!q.whole_word);
@@ -274,10 +261,10 @@ mod tests {
         assert_eq!(d.focus, FOCUS_INPUT);
         let cs = CommandSet::new();
         let mut ctx = Context::new(&cs);
-        // The "Case sensitive" box is at interior-local (0, 3) → dialog-local (1, 4).
+        // The "Case sensitive" box is at (0, 3).
         let click = Event::Mouse(MouseEvent {
             kind: MouseKind::Down(MouseButton::Left),
-            pos: Point::new(3, 4),
+            pos: Point::new(2, 3),
             modifiers: Modifiers::NONE,
         });
         assert_eq!(d.handle_event(&click, &mut ctx), EventResult::Consumed);

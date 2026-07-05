@@ -1,22 +1,34 @@
 //! The Go to Line dialog: a number field and OK/Cancel.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use rvision::canvas::Canvas;
-use rvision::cell::Cell;
 use rvision::color::Style;
-use rvision::command::{CM_CANCEL, CM_OK, Command};
+use rvision::command::{CM_CANCEL, CM_OK};
 use rvision::event::{Event, EventResult, KeyCode, MouseButton, MouseEvent, MouseKind};
 use rvision::geometry::{Point, Rect, Size};
 use rvision::theme::{Role, Theme};
-use rvision::view::{Context, Modal, View};
-use rvision::widgets::{Button, InputLine};
+use rvision::view::{Context, View};
+use rvision::widgets::{Button, InputLine, Window};
+
+use super::modal_window;
+
+/// The dialog's outer size — a [`Window`](rvision::widgets::Window) built
+/// around it (via `super::modal_window`) is exactly this, one cell of
+/// border swallowing the difference from [`GoToLine`]'s own content-only
+/// [`View::bounds`] (ADR 0016: the `Window`'s `Frame` draws the border/title,
+/// not the dialog itself).
+pub(crate) const SIZE: Size = Size::new(40, 9);
 
 const FOCUS_INPUT: usize = 0;
 const FOCUS_OK: usize = 1;
 const FOCUS_CANCEL: usize = 2;
 const FOCUS_COUNT: usize = 3;
 
-/// A modal "go to line number" prompt. Read [`line`](GoToLine::line) after
-/// `exec_view` returns `CM_OK`.
+/// A "go to line number" prompt, run modally via `super::modal_window`. Read
+/// [`line`](GoToLine::line) off the shared handle after `exec_view` returns
+/// `CM_OK`.
 pub struct GoToLine {
     size: Size,
     style: Style,
@@ -30,19 +42,35 @@ impl GoToLine {
     /// Creates the dialog with an empty field (InputLine has no select-all, so a
     /// pre-filled value would only get typed onto — better to start blank).
     pub fn new(theme: &Theme) -> Self {
-        let size = Size::new(40, 9);
-        let iw = size.width - 2;
-        let ih = size.height - 2;
+        let size = Size::new(SIZE.width - 2, SIZE.height - 2);
         let mut dialog = Self {
             size,
             style: theme.style(Role::DialogBackground),
-            input: InputLine::new(rect(0, 2, iw, 1), theme),
-            ok: Button::new(rect(iw - 22, ih - 1, 10, 1), "OK", CM_OK, theme).default(true),
-            cancel: Button::new(rect(iw - 11, ih - 1, 10, 1), "Cancel", CM_CANCEL, theme),
+            input: InputLine::new(rect(0, 2, size.width, 1), theme),
+            ok: Button::new(
+                rect(size.width - 22, size.height - 1, 10, 1),
+                "OK",
+                CM_OK,
+                theme,
+            )
+            .default(true),
+            cancel: Button::new(
+                rect(size.width - 11, size.height - 1, 10, 1),
+                "Cancel",
+                CM_CANCEL,
+                theme,
+            ),
             focus: FOCUS_INPUT,
         };
         dialog.apply_focus();
         dialog
+    }
+
+    /// Builds a fresh dialog wrapped in a ready-to-run [`Window`], plus the
+    /// handle to read [`line`](Self::line) back through once
+    /// [`exec_view`](rvision::app::Application::exec_view) returns `CM_OK`.
+    pub fn window(theme: &Theme) -> (Window, Rc<RefCell<Self>>) {
+        modal_window("Go to Line", SIZE, theme, Self::new(theme))
     }
 
     /// The entered line as a 1-based number, or `None` if the field is empty or not
@@ -78,21 +106,13 @@ impl GoToLine {
         EventResult::Consumed
     }
 
-    /// The interior rectangle (inset one cell on every side) in local coordinates.
-    fn interior(&self) -> Rect {
-        Rect::from_origin_size(
-            Point::new(1, 1),
-            Size::new((self.size.width - 2).max(0), (self.size.height - 2).max(0)),
-        )
-    }
-
-    /// Routes a mouse event (in dialog-local coordinates) to the control under the
-    /// pointer, focusing it on a press, mirroring the key dispatch in `handle_event`.
-    /// Control bounds are interior-local, so the pointer is shifted by the interior
-    /// origin first, then into the control's own coordinates.
+    /// Routes a mouse event to the control under the pointer, focusing it on a
+    /// press, mirroring the key dispatch in `handle_event`. `m.pos` already
+    /// arrives in this view's own local coordinates — the border/title
+    /// belongs to the [`Window`](rvision::widgets::Window) built around this
+    /// dialog, which translates into it before forwarding (ADR 0016).
     fn handle_mouse(&mut self, m: &MouseEvent, ctx: &mut Context) -> EventResult {
-        let io = self.interior().origin();
-        let p = m.pos.offset(-io.x, -io.y);
+        let p = m.pos;
         let bounds = [self.input.bounds(), self.ok.bounds(), self.cancel.bounds()];
         let Some(i) = bounds.iter().position(|b| b.contains(p)) else {
             return EventResult::Ignored;
@@ -125,21 +145,9 @@ impl View for GoToLine {
     }
 
     fn draw(&self, canvas: &mut Canvas) {
-        let area = canvas.bounds();
-        canvas.fill(area, &Cell::blank(self.style));
-        canvas.draw_box(area, self.style);
-        let title = " Go to Line ";
-        let x = ((area.width() - title.chars().count() as i16) / 2).max(1);
-        canvas.put_str(Point::new(x, 0), title, self.style);
-
-        let interior = self.interior();
-        if interior.is_empty() {
-            return;
-        }
-        let mut sub = canvas.child(interior);
-        sub.put_str(Point::new(0, 0), "Line number:", self.style);
+        canvas.put_str(Point::new(0, 0), "Line number:", self.style);
         for control in [&self.input as &dyn View, &self.ok, &self.cancel] {
-            let mut child = sub.child(control.bounds());
+            let mut child = canvas.child(control.bounds());
             control.draw(&mut child);
         }
     }
@@ -175,16 +183,6 @@ impl View for GoToLine {
 
     fn focusable(&self) -> bool {
         true
-    }
-}
-
-impl Modal for GoToLine {
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn ends_on(&self, command: Command) -> bool {
-        command == CM_OK || command == CM_CANCEL
     }
 }
 
@@ -267,8 +265,8 @@ mod tests {
     #[test]
     fn clicking_the_ok_button_focuses_it_and_posts_ok() {
         let mut d = dialog();
-        // OK sits at interior-local (16, 6) → dialog-local (17, 7).
-        let (r, posted) = click(&mut d, 18, 7);
+        // OK sits at (16, 6).
+        let (r, posted) = click(&mut d, 17, 6);
         assert_eq!(r, EventResult::Consumed);
         assert_eq!(d.focus, FOCUS_OK);
         assert_eq!(posted, vec![Event::Command(CM_OK)]);
@@ -277,16 +275,8 @@ mod tests {
     #[test]
     fn clicking_cancel_posts_cancel() {
         let mut d = dialog();
-        let (_, posted) = click(&mut d, 30, 7); // the Cancel button
+        let (_, posted) = click(&mut d, 29, 6); // the Cancel button
         assert_eq!(d.focus, FOCUS_CANCEL);
         assert_eq!(posted, vec![Event::Command(CM_CANCEL)]);
-    }
-
-    #[test]
-    fn ends_on_ok_and_cancel_only() {
-        let d = dialog();
-        assert!(Modal::ends_on(&d, CM_OK));
-        assert!(Modal::ends_on(&d, CM_CANCEL));
-        assert!(!Modal::ends_on(&d, Command(rvision::command::CM_USER + 1)));
     }
 }

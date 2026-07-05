@@ -221,8 +221,7 @@ dependencies = [
 
 [[package]]
 name = "rvision"
-version = "0.1.0"
-source = "git+https://github.com/SuzukiStumpy/rvision?tag=v0.1.0#1d525abc6bf9c6611d47958339518bc703d0fc4c"
+version = "2.0.1"
 dependencies = [
  "crossterm",
  "unicode-segmentation",

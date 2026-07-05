@@ -2,23 +2,21 @@
 source: crates/edit/src/help.rs
 expression: buf.to_text()
 ---
-┌──────────────────────────────── Help ────────────────────────────────┐
-│Overview            │Welcome to edit.                                 │
-│Keyboard            │                                                 │
-│Clipboard           │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│                    │                                                 │
-│↑↓ Topic   Tab Switch pane   Esc Close                                │
-└──────────────────────────────────────────────────────────────────────┘
+Overview            │Welcome to edit.                                 
+Keyboard            │                                                 
+Clipboard           │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+                    │                                                 
+↑↓ Topic   Tab Switch pane   Esc Close
