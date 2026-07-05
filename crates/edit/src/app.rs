@@ -140,6 +140,11 @@ impl Document {
         self.path
             .as_ref()
             .and_then(|p| p.parent())
+            // `Path::parent()` returns `Some("")`, not `None`, for a single-component
+            // relative path (e.g. the `edit somename.txt` command-line case) — treat
+            // that the same as "no parent" rather than handing an empty path to a
+            // file dialog, which can't list it.
+            .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     }
@@ -2448,6 +2453,30 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"!one\r\ntwo\r\n");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn start_dir_of_a_fresh_untitled_document_is_the_current_dir() {
+        let ed = app();
+        assert_eq!(ed.start_dir(), std::env::current_dir().unwrap());
+    }
+
+    #[test]
+    fn start_dir_of_a_bare_filename_with_no_directory_is_the_current_dir() {
+        // `Path::parent()` returns `Some("")`, not `None`, for a single-component
+        // relative path — the `edit somename.txt` command-line case (main.rs) must
+        // not mistake that empty parent for a real directory to list.
+        let mut ed = app();
+        ed.open_or_new("a-file-that-does-not-exist.txt").unwrap();
+        assert_eq!(ed.start_dir(), std::env::current_dir().unwrap());
+    }
+
+    #[test]
+    fn start_dir_of_a_path_with_a_real_parent_is_that_parent() {
+        let mut ed = app();
+        ed.open_or_new("/tmp/some-edit-test-subdir/whatever.txt")
+            .unwrap();
+        assert_eq!(ed.start_dir(), PathBuf::from("/tmp/some-edit-test-subdir"));
     }
 
     // --- MDI: windows (Phase 8a.2) ---
