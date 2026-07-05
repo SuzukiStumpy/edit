@@ -20,7 +20,7 @@ members = ["crates/edit"]
 # the annotated line below — its `rust` updater does not follow
 # `[workspace.package]` inheritance, so we drive it with the format-agnostic
 # generic updater keyed on this `x-release-please-version` marker.
-version = "1.0.1" # x-release-please-version
+version = "1.0.2" # x-release-please-version
 edition = "2024"
 rust-version = "1.85"        # MSRV — see rust-toolchain.toml and ADR 0012
 license = "MIT OR Apache-2.0"

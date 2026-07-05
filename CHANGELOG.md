@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/SuzukiStumpy/edit/compare/v1.0.1...v1.0.2) (2026-07-05)
+
+
+### Bug Fixes
+
+* **edit:** treat an empty Path::parent() as no directory in start_dir ([b5d4fe7](https://github.com/SuzukiStumpy/edit/commit/b5d4fe75cd46f017c4949d5a2c6e051d063d847e))
+
 ## [1.0.1](https://github.com/SuzukiStumpy/edit/compare/v1.0.0...v1.0.1) (2026-07-02)
 
 
