@@ -259,25 +259,22 @@ pub fn save_to(path: &Path, settings: &Settings) -> io::Result<()> {
 }
 
 /// The platform-appropriate settings file path, or `None` when the environment
-/// gives us nowhere to put it. See ADR 0025 for the per-OS rules.
+/// gives us nowhere to put it. Per-OS resolution now delegates to
+/// [`rvision::resource::user_resource_path`] (ADR 0024, ADR 0026) — the same
+/// per-OS rules `edit` used to hand-roll, generalized in the framework once
+/// themes/help needed the same thing.
 ///
 /// `$EDIT_CONFIG_PATH`, if set, overrides everything with an explicit file path —
 /// a testability seam (so a test redirects persistence away from the real
-/// per-user config) that doubles as a power-user override.
+/// per-user config) that doubles as a power-user override. `rvision::resource`
+/// deliberately doesn't generalize this env-var override (ADR 0024 addendum),
+/// so `edit` keeps checking it itself before falling through.
 pub fn config_path() -> Option<PathBuf> {
     let get = |key: &str| std::env::var(key).ok();
     if let Some(explicit) = config_override(&get) {
         return Some(explicit);
     }
-    // `cfg!` keeps all three branches in the AST (unlike `#[cfg]`), so each
-    // resolver stays referenced and unit-tested on every host.
-    if cfg!(target_os = "windows") {
-        windows_config_path(get)
-    } else if cfg!(target_os = "macos") {
-        macos_config_path(get)
-    } else {
-        unix_config_path(get)
-    }
+    rvision::resource::user_resource_path(APP_DIR, FILE_NAME)
 }
 
 /// The explicit `$EDIT_CONFIG_PATH` override (a whole file path), if set.
@@ -288,27 +285,6 @@ fn config_override(get: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// An environment value, treating an unset *or empty* variable as absent.
 fn nonempty(get: &impl Fn(&str) -> Option<String>, key: &str) -> Option<String> {
     get(key).filter(|v| !v.is_empty())
-}
-
-/// Linux/BSD: `$XDG_CONFIG_HOME/edit/config`, else `$HOME/.config/edit/config`.
-fn unix_config_path(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
-    let base = nonempty(&get, "XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| nonempty(&get, "HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join(APP_DIR).join(FILE_NAME))
-}
-
-/// macOS: `$HOME/Library/Application Support/edit/config`.
-fn macos_config_path(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
-    let base = nonempty(&get, "HOME")
-        .map(|h| PathBuf::from(h).join("Library").join("Application Support"))?;
-    Some(base.join(APP_DIR).join(FILE_NAME))
-}
-
-/// Windows: `%APPDATA%\edit\config`.
-fn windows_config_path(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
-    let base = nonempty(&get, "APPDATA").map(PathBuf::from)?;
-    Some(base.join(APP_DIR).join(FILE_NAME))
 }
 
 #[cfg(test)]
@@ -526,43 +502,10 @@ mod tests {
     }
 
     // --- path resolution ---
-
-    /// Builds an expected path with the host's separator (so these assertions
-    /// hold on the Windows CI runner too, where `join` uses `\`).
-    fn expect(base: &str, rest: &[&str]) -> Option<PathBuf> {
-        let mut p = PathBuf::from(base);
-        for seg in rest {
-            p.push(seg);
-        }
-        p.push(APP_DIR);
-        p.push(FILE_NAME);
-        Some(p)
-    }
-
-    #[test]
-    fn unix_prefers_xdg_then_falls_back_to_home() {
-        let with_xdg = unix_config_path(env(&[("XDG_CONFIG_HOME", "/cfg"), ("HOME", "/home/me")]));
-        assert_eq!(with_xdg, expect("/cfg", &[]));
-
-        let home_only = unix_config_path(env(&[("HOME", "/home/me")]));
-        assert_eq!(home_only, expect("/home/me", &[".config"]));
-    }
-
-    #[test]
-    fn empty_env_values_count_as_unset() {
-        // Empty XDG_CONFIG_HOME falls through to HOME.
-        let s = unix_config_path(env(&[("XDG_CONFIG_HOME", ""), ("HOME", "/h")]));
-        assert_eq!(s, expect("/h", &[".config"]));
-        // Nothing set at all -> no path.
-        assert_eq!(unix_config_path(env(&[])), None);
-    }
-
-    #[test]
-    fn macos_uses_application_support() {
-        let s = macos_config_path(env(&[("HOME", "/Users/me")]));
-        assert_eq!(s, expect("/Users/me", &["Library", "Application Support"]));
-        assert_eq!(macos_config_path(env(&[])), None);
-    }
+    //
+    // Per-OS resolution itself now lives in `rvision::resource` (ADR 0026) and
+    // is tested there; only `edit`'s own `$EDIT_CONFIG_PATH` override survives
+    // here.
 
     #[test]
     fn explicit_override_wins_and_empty_is_ignored() {
@@ -572,12 +515,5 @@ mod tests {
         );
         assert_eq!(config_override(&env(&[("EDIT_CONFIG_PATH", "")])), None);
         assert_eq!(config_override(&env(&[])), None);
-    }
-
-    #[test]
-    fn windows_uses_appdata() {
-        let s = windows_config_path(env(&[("APPDATA", r"C:\Users\me\AppData\Roaming")]));
-        assert_eq!(s, expect(r"C:\Users\me\AppData\Roaming", &[]));
-        assert_eq!(windows_config_path(env(&[])), None);
     }
 }
