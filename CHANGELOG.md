@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/SuzukiStumpy/edit/compare/v1.0.2...v1.1.0) (2026-07-06)
+
+
+### Features
+
+* **edit:** host the help window as a non-modal resident overlay ([597f186](https://github.com/SuzukiStumpy/edit/commit/597f186fa540ac9e4baf140681030a60abb945a6))
+
 ## [1.0.2](https://github.com/SuzukiStumpy/edit/compare/v1.0.1...v1.0.2) (2026-07-05)
 
 
