@@ -1,0 +1,24 @@
+---
+source: crates/edit/src/app.rs
+expression: buf.to_text()
+---
+ File  Edit  Search  Window  Help                           
+╔═[■]════════════════════════ Help ════════════════════════╗
+║Overview              │edit is a text-mode editor in the ▲║
+║Keyboard & mouse      │spirit of MS-DOS EDIT, built on   █║
+║Clipboard             │the rvision TurboVision-style     ▒║
+║Files                 │framework. It is a Rust learning  ▒║
+║Find & Replace        │project.                          ▒║
+║Settings              │                                  ▒║
+║                      │Drive it from the menu bar (press ▒║
+║                      │Alt or F10, then the highlighted  ▒║
+║                      │letters), the status line along   ▒║
+║                      │the bottom of the screen, or the  ▒║
+║                      │keys listed under each topic.     ▒║
+║                      │                                  ▒║
+║                      │To read help: pick a topic from   ▒║
+║                      │the contents list on the left with▒║
+║                      │the up and down arrows. Press Tab ▒║
+║                      │to move into this page and scroll ▼║
+╚══════════════════════════════════════════════════════════◢
+ F1 Help  F2 Save  Alt-X Exit

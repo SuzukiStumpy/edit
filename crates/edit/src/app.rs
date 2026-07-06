@@ -25,11 +25,12 @@ use rvision::event::{
     Event, EventResult, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
 };
 use rvision::geometry::{Point, Rect, Size};
+use rvision::help::HelpContents;
 use rvision::theme::{Role, Theme};
 use rvision::view::{Context, View};
 use rvision::widgets::{
-    FileDialog, Frame, Menu, MenuBar, MenuItem, MessageBox, Orientation, ScrollBar, ScrollPart,
-    StatusItem, StatusLine,
+    FileDialog, Frame, HelpWindow, Menu, MenuBar, MenuItem, MessageBox, Orientation, ScrollBar,
+    ScrollPart, StatusItem, StatusLine,
 };
 
 use crate::dialogs::{CM_DEFAULTS, FindDialog, GoToLine, ReplaceDialog, SettingsDialog};
@@ -38,7 +39,7 @@ use crate::editor::{
     EditorView,
 };
 use crate::file::{self, Encoding};
-use crate::help::{HELP_TEXT, HelpViewer};
+use crate::help::HELP_TEXT;
 use crate::settings::{MAX_RECENT, Settings};
 
 /// File ▸ New.
@@ -180,6 +181,33 @@ pub struct EditorApp {
     inactive_title_style: Style,
     shadow_style: Style,
     backdrop: Cell,
+    /// The help window, if open — a standalone singleton overlay (ADR 0027),
+    /// not a member of `documents`: it never joins the Window menu, F6 cycle,
+    /// or Alt+1..9, but is otherwise a real resident window (move/resize/close).
+    help: Option<HelpOverlay>,
+    /// Whether `help` (rather than the document stack) currently owns the
+    /// keyboard and draws on top. Meaningless while `help` is `None`.
+    help_focused: bool,
+}
+
+/// The resident help window (ADR 0027): rvision's own [`rvision::widgets::Window`]
+/// (built by [`HelpWindow::build`]/`build_at`), hosted directly by `EditorApp`
+/// instead of `exec_view`, so its bounds live in the same desktop-local
+/// coordinate space `Document::normal` uses.
+struct HelpOverlay {
+    window: rvision::widgets::Window,
+    /// An in-progress drag of the help window's own chrome, or `None`.
+    drag: Option<HelpDrag>,
+}
+
+/// An in-progress mouse drag of the help window's frame — the same shape as
+/// [`Drag`], minus `ScrollThumb` (the help window handles its own internal
+/// scroll-bar dragging, ADR 0027) and any zoom variant (help is never
+/// zoomable).
+#[derive(Debug, Clone, Copy)]
+enum HelpDrag {
+    Move { dx: i16, dy: i16 },
+    Resize { dx: i16, dy: i16 },
 }
 
 /// An in-progress mouse drag of the active window's frame (Phase 9d). The offsets
@@ -413,6 +441,8 @@ impl EditorApp {
             inactive_title_style: theme.style(Role::WindowTitleInactive),
             shadow_style: theme.style(Role::Shadow),
             backdrop: Cell::from_char('░', theme.style(Role::DesktopBackground)),
+            help: None,
+            help_focused: false,
         };
         app.add_document(Document::new(theme));
         app
@@ -518,6 +548,9 @@ impl EditorApp {
         for doc in &mut self.documents {
             doc.normal = clamp_rect(doc.normal, ds);
         }
+        if let Some(help) = &mut self.help {
+            help.window.set_bounds(clamp_rect(help.window.bounds(), ds));
+        }
         self.sync_layout();
     }
 
@@ -620,9 +653,18 @@ impl EditorApp {
 
     /// Classifies a press at screen `pos` on window `i`'s chrome: the close/zoom
     /// glyphs (column spans shared with the [`Frame`] drawing), the bottom-right
-    /// corner (resize), or the rest of the title row (move).
+    /// corner (resize), or the rest of the title row (move). Documents are
+    /// always zoomable.
     fn chrome_hit(&self, i: usize, pos: Point) -> ChromeHit {
-        let r = self.window_rect_screen(i);
+        Self::chrome_hit_at(self.window_rect_screen(i), pos, true)
+    }
+
+    /// The generic geometry [`chrome_hit`](Self::chrome_hit) reduces to: pure
+    /// `Rect` math with no `Document` access, so the help overlay (ADR 0027)
+    /// reuses it directly against its own screen rect. `zoomable` gates
+    /// whether the zoom-glyph span is tested at all — the help window has no
+    /// zoom glyph to hit.
+    fn chrome_hit_at(r: Rect, pos: Point, zoomable: bool) -> ChromeHit {
         let (w, h) = (r.width(), r.height());
         let lx = pos.x - r.origin().x;
         let ly = pos.y - r.origin().y;
@@ -633,7 +675,7 @@ impl EditorApp {
             if Frame::close_span(w, false).is_some_and(|s| s.contains(&lx)) {
                 return ChromeHit::Close;
             }
-            if Frame::zoom_span(w, false).is_some_and(|s| s.contains(&lx)) {
+            if zoomable && Frame::zoom_span(w, false).is_some_and(|s| s.contains(&lx)) {
                 return ChromeHit::Zoom;
             }
         }
@@ -742,6 +784,125 @@ impl EditorApp {
                 editor.scroll_cols(bar.pos_at(pos) as i16 - m.left);
             }
         }
+    }
+
+    // --- help overlay (ADR 0027): a standalone, non-modal resident window ---
+
+    /// Opens the help window at `initial` (or the home topic when `None`), or —
+    /// if one is already open — just brings it to front and gives it focus,
+    /// ignoring `initial` (a singleton, reused rather than rebuilt, matching
+    /// `rvision`'s own "hold a window by value" idiom, ADR 0016). The `initial`
+    /// parameter is the context-sensitivity seam (ADR 0023): every caller
+    /// passes `None` for now; later a dialog or control can name a relevant
+    /// topic.
+    pub fn open_help(&mut self, theme: &Theme, initial: Option<&str>) {
+        if self.help.is_none() {
+            let contents = HelpContents::parse(HELP_TEXT);
+            let area = Rect::from_origin_size(Point::new(0, 0), self.desktop().size());
+            let window = match initial {
+                Some(topic) => HelpWindow::build_at(contents, area, "Help", theme, topic),
+                None => HelpWindow::build(contents, area, "Help", theme),
+            }
+            .moveable(true)
+            .resizable(true)
+            .closable(true)
+            .zoomable(false);
+            self.help = Some(HelpOverlay { window, drag: None });
+        }
+        self.focus_help();
+    }
+
+    /// Whether the help window is open *and* currently owns the keyboard/topmost
+    /// draw position, rather than the document stack.
+    pub(crate) fn help_focused(&self) -> bool {
+        self.help_focused && self.help.is_some()
+    }
+
+    /// Gives the help window focus (keyboard + topmost), syncing its own
+    /// active/inactive frame style to match. A no-op if it isn't open.
+    fn focus_help(&mut self) {
+        self.help_focused = true;
+        if let Some(help) = &mut self.help {
+            help.window.set_active(true);
+        }
+    }
+
+    /// Hands focus back to the document stack, syncing the help window's
+    /// frame style to inactive. A no-op if it isn't open.
+    fn defocus_help(&mut self) {
+        self.help_focused = false;
+        if let Some(help) = &mut self.help {
+            help.window.set_active(false);
+        }
+    }
+
+    /// Closes the help window outright — no discard guard, since it has
+    /// nothing to save (unlike [`remove_active_window`](Self::remove_active_window)).
+    pub(crate) fn close_help(&mut self) {
+        self.help = None;
+    }
+
+    /// The help window's effective rectangle in **screen** coordinates, or
+    /// `None` if it isn't open — mirrors [`window_rect_screen`](Self::window_rect_screen).
+    fn help_rect_screen(&self) -> Option<Rect> {
+        let help = self.help.as_ref()?;
+        let origin = self.desktop().origin();
+        let local = help.window.bounds();
+        Some(Rect::from_origin_size(
+            local.origin().offset(origin.x, origin.y),
+            local.size(),
+        ))
+    }
+
+    /// Begins a title-bar move drag of the help window.
+    fn start_help_move(&mut self, pos: Point) {
+        let Some(o) = self.help_rect_screen().map(|r| r.origin()) else {
+            return;
+        };
+        if let Some(help) = &mut self.help {
+            help.drag = Some(HelpDrag::Move {
+                dx: pos.x - o.x,
+                dy: pos.y - o.y,
+            });
+        }
+    }
+
+    /// Begins a corner resize drag of the help window.
+    fn start_help_resize(&mut self, pos: Point) {
+        let Some(corner) = self
+            .help_rect_screen()
+            .map(|r| r.bottom_right().offset(-1, -1))
+        else {
+            return;
+        };
+        if let Some(help) = &mut self.help {
+            help.drag = Some(HelpDrag::Resize {
+                dx: pos.x - corner.x,
+                dy: pos.y - corner.y,
+            });
+        }
+    }
+
+    /// Advances the help window's in-progress drag to screen `pos`, clamped to
+    /// the desktop (and a minimum size) — mirrors [`drag_to`](Self::drag_to).
+    fn drag_help_to(&mut self, pos: Point) {
+        let ds = self.desktop().size();
+        let desk = self.desktop().origin();
+        let Some(help) = &mut self.help else { return };
+        let Some(drag) = help.drag else { return };
+        let cur = help.window.bounds();
+        let next = match drag {
+            HelpDrag::Move { dx, dy } => {
+                let origin = Point::new(pos.x - dx - desk.x, pos.y - dy - desk.y);
+                Rect::from_origin_size(origin, cur.size())
+            }
+            HelpDrag::Resize { dx, dy } => {
+                let w = (pos.x - dx - desk.x - cur.origin().x + 1).max(MIN_WINDOW.width);
+                let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
+                Rect::from_origin_size(cur.origin(), Size::new(w, h))
+            }
+        };
+        help.window.set_bounds(clamp_rect(next, ds));
     }
 
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
@@ -934,6 +1095,10 @@ impl EditorApp {
     pub fn activate(&mut self, index: usize) {
         if index < self.documents.len() {
             self.active = index;
+            // Hand keyboard focus back to the document being activated — a
+            // window-cycle key shouldn't leave keystrokes going to a help
+            // window that's no longer topmost (ADR 0027).
+            self.defocus_help();
             self.sync_layout();
         }
     }
@@ -1140,9 +1305,30 @@ impl EditorApp {
         }
         match mouse.kind {
             MouseKind::Down(MouseButton::Left) => {
+                // The help overlay (ADR 0027) gets first refusal when it's the
+                // topmost plane; otherwise documents get it, falling back to help
+                // if the press missed every document (help drawn behind them).
+                let help_on_top = self.help_focused();
+                if help_on_top {
+                    if let Some(help_rect) = self.help_rect_screen() {
+                        if help_rect.contains(mouse.pos) {
+                            return self.handle_help_press(help_rect, mouse, ctx);
+                        }
+                    }
+                }
                 let Some(i) = self.window_at(mouse.pos) else {
+                    if !help_on_top {
+                        if let Some(help_rect) = self.help_rect_screen() {
+                            if help_rect.contains(mouse.pos) {
+                                return self.handle_help_press(help_rect, mouse, ctx);
+                            }
+                        }
+                    }
                     return EventResult::Ignored;
                 };
+                // A document press always hands focus back from help, even when
+                // the pressed window is already `self.active`.
+                self.defocus_help();
                 if i != self.active {
                     self.activate(i);
                 }
@@ -1172,10 +1358,14 @@ impl EditorApp {
                 }
                 EventResult::Consumed
             }
-            // A drag moves/resizes the window or drags a scroll thumb if one is under
-            // way; otherwise it extends a selection, but only one the editor started.
+            // A drag moves/resizes the window, drags a scroll thumb, or continues
+            // a help-window move/resize, if one is under way; otherwise it extends
+            // a selection, but only one the editor started.
             MouseKind::Drag(MouseButton::Left) => {
-                if self.drag.is_some() {
+                if self.help.as_ref().is_some_and(|h| h.drag.is_some()) {
+                    self.drag_help_to(mouse.pos);
+                    EventResult::Consumed
+                } else if self.drag.is_some() {
                     self.drag_to(mouse.pos);
                     EventResult::Consumed
                 } else if self.selecting {
@@ -1186,10 +1376,15 @@ impl EditorApp {
                     EventResult::Consumed
                 }
             }
-            // Releasing ends any window/thumb drag or selection (the editor needs no
-            // release of its own).
+            // Releasing ends any window/thumb/help drag or selection (the editor
+            // needs no release of its own).
             MouseKind::Up(MouseButton::Left) => {
-                let was_active = self.drag.take().is_some() || self.selecting;
+                let help_was_dragging = self
+                    .help
+                    .as_mut()
+                    .and_then(|h| h.drag.take())
+                    .is_some();
+                let was_active = help_was_dragging || self.drag.take().is_some() || self.selecting;
                 self.selecting = false;
                 if was_active {
                     EventResult::Consumed
@@ -1197,14 +1392,58 @@ impl EditorApp {
                     EventResult::Ignored
                 }
             }
-            // The wheel scrolls the window under the pointer without focusing it.
-            MouseKind::ScrollUp | MouseKind::ScrollDown => match self.window_at(mouse.pos) {
-                Some(i) => self.documents[i]
-                    .editor
-                    .handle_event(&Event::Mouse(*mouse), ctx),
-                None => EventResult::Ignored,
-            },
+            // The wheel scrolls the window under the pointer without focusing it —
+            // help wins ties over an overlapping document, the same simplification
+            // draw order already makes (ADR 0027).
+            MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                if let Some(help_rect) = self.help_rect_screen() {
+                    if help_rect.contains(mouse.pos) {
+                        return self.forward_to_help(help_rect, mouse, ctx);
+                    }
+                }
+                match self.window_at(mouse.pos) {
+                    Some(i) => self.documents[i]
+                        .editor
+                        .handle_event(&Event::Mouse(*mouse), ctx),
+                    None => EventResult::Ignored,
+                }
+            }
             _ => EventResult::Ignored,
+        }
+    }
+
+    /// Handles a left press already known to be within the help window's
+    /// screen rect: focuses it, then classifies the press exactly like a
+    /// document's chrome (close/move/resize) or forwards it into the window's
+    /// own interior. Always returns [`EventResult::Consumed`], matching the
+    /// document press branch's shape.
+    fn handle_help_press(&mut self, help_rect: Rect, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
+        self.focus_help();
+        self.selecting = false;
+        match Self::chrome_hit_at(help_rect, mouse.pos, false) {
+            ChromeHit::Close => ctx.post(CM_CLOSE),
+            ChromeHit::Zoom => {} // unreachable: help is built with `.zoomable(false)`
+            ChromeHit::Move => self.start_help_move(mouse.pos),
+            ChromeHit::Resize => self.start_help_resize(mouse.pos),
+            ChromeHit::None => {
+                self.forward_to_help(help_rect, mouse, ctx);
+            }
+        }
+        EventResult::Consumed
+    }
+
+    /// Forwards `mouse` (already known to be within `help_rect`) into the help
+    /// window, translated to its own local coordinates — mirrors how
+    /// `Application::exec_view` translates a mouse event for a modal `Window`.
+    fn forward_to_help(&mut self, help_rect: Rect, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
+        let origin = help_rect.origin();
+        let local = MouseEvent {
+            pos: mouse.pos.offset(-origin.x, -origin.y),
+            ..*mouse
+        };
+        match &mut self.help {
+            Some(help) => help.window.handle_event(&Event::Mouse(local), ctx),
+            None => EventResult::Ignored,
         }
     }
 
@@ -1217,12 +1456,29 @@ impl EditorApp {
         let mut ctx = Context::new(&commands);
         match event {
             Event::Key(key) => {
-                // menu (pre-process) → window keys → active editor → status (post).
+                // menu (pre-process) → window keys → help (if focused) → active
+                // editor → status (post).
                 let mut result = self.menu_bar.handle_event(event, &mut ctx);
                 if result == EventResult::Ignored {
                     result = self.handle_window_key(key, &mut ctx);
                 }
-                if result == EventResult::Ignored && !self.documents.is_empty() {
+                if result == EventResult::Ignored && self.help_focused() {
+                    // Esc closes the (non-modal) help window directly — it isn't
+                    // built with `.esc_cancels(true)` any more (ADR 0027), so
+                    // `Window` itself wouldn't otherwise act on it.
+                    if key.code == KeyCode::Esc {
+                        self.close_help();
+                        result = EventResult::Consumed;
+                    } else if let Some(help) = &mut self.help {
+                        result = help.window.handle_event(event, &mut ctx);
+                    }
+                }
+                // The active editor never sees a key while help owns the
+                // keyboard, even one help's own interior left unhandled.
+                if result == EventResult::Ignored
+                    && !self.documents.is_empty()
+                    && !self.help_focused()
+                {
                     result = self.doc_mut().editor.handle_event(event, &mut ctx);
                 }
                 if result == EventResult::Ignored {
@@ -1322,8 +1578,23 @@ impl EditorApp {
             let mut desk = canvas.child(r.desktop);
             let area = desk.bounds();
             desk.fill(area, &self.backdrop);
+            // The help overlay (ADR 0027) draws either behind or in front of the
+            // whole document stack, depending on which currently has focus — a
+            // deliberate two-plane simplification rather than interleaving it
+            // into per-document z-order.
+            let help_on_top = self.help_focused();
+            if let Some(help) = &self.help {
+                if !help_on_top {
+                    self.draw_help(&mut desk, help);
+                }
+            }
             for i in self.draw_order() {
                 self.draw_window(&mut desk, i);
+            }
+            if let Some(help) = &self.help {
+                if help_on_top {
+                    self.draw_help(&mut desk, help);
+                }
             }
         }
         self.status_line.draw(&mut canvas.child(r.status));
@@ -1332,8 +1603,23 @@ impl EditorApp {
         self.menu_bar.draw_overlay(canvas);
     }
 
+    /// Draws the help overlay (frame + interior + its own scroll bars, all
+    /// handled by `rvision::widgets::Window` itself) at its rectangle within
+    /// the desktop canvas `desk` — mirrors [`draw_window`](Self::draw_window)'s
+    /// shadow-then-content shape.
+    fn draw_help(&self, desk: &mut Canvas, help: &HelpOverlay) {
+        let local = help.window.bounds();
+        if local.is_empty() {
+            return;
+        }
+        desk.shadow(local, self.shadow_style);
+        let mut win = desk.child(local);
+        help.window.draw(&mut win);
+    }
+
     /// Draws window `i` (frame + editor + scroll bars) at its effective rectangle
-    /// within the desktop canvas `desk`. The active window gets the doubled frame.
+    /// within the desktop canvas `desk`. The active window gets the doubled frame
+    /// — but not while the help overlay (ADR 0027) has focus instead.
     fn draw_window(&self, desk: &mut Canvas, i: usize) {
         let local = self.window_rect_local(i);
         if local.is_empty() {
@@ -1345,7 +1631,7 @@ impl EditorApp {
         let doc = &self.documents[i];
         let mut win = desk.child(local);
         let area = win.bounds();
-        let active = i == self.active;
+        let active = i == self.active && !self.help_focused();
         Frame::new(
             &self.window_title(i),
             self.frame_style,
@@ -1541,23 +1827,9 @@ fn handle_command<T: Backend + EventSource>(
         CM_CLOSE => close(app, ed, theme)?,
         CM_ABOUT => about(app, ed, theme)?,
         CM_SETTINGS => open_settings(app, ed, theme)?,
-        CM_HELP => open_help(app, ed, theme, None)?,
+        CM_HELP => ed.open_help(theme, None),
         _ => {}
     }
-    Ok(())
-}
-
-/// Opens the modal help viewer at `initial` (or the home topic when `None`). The
-/// `initial` parameter is the context-sensitivity seam (ADR 0023): every caller
-/// passes `None` for now; later a dialog or control can name a relevant topic.
-fn open_help<T: Backend + EventSource>(
-    app: &mut Application<T>,
-    ed: &mut EditorApp,
-    theme: &Theme,
-    initial: Option<&str>,
-) -> io::Result<()> {
-    let mut window = HelpViewer::window(HELP_TEXT, initial, theme);
-    app.exec_view(&mut *ed, &mut window)?;
     Ok(())
 }
 
@@ -1724,12 +1996,18 @@ fn confirm_discard_all<T: Backend + EventSource>(
 }
 
 /// Confirms discarding the active window, then closes it (Window ▸ Close).
-/// Closing the last window leaves an empty desktop.
+/// Closing the last window leaves an empty desktop. A focused help window
+/// (ADR 0027) closes directly instead — it has nothing to discard, and isn't
+/// the "active window" `remove_active_window` means.
 fn close<T: Backend + EventSource>(
     app: &mut Application<T>,
     ed: &mut EditorApp,
     theme: &Theme,
 ) -> io::Result<()> {
+    if ed.help_focused() {
+        ed.close_help();
+        return Ok(());
+    }
     if confirm_discard(app, ed, theme)? {
         ed.remove_active_window();
     }
@@ -3053,5 +3331,211 @@ mod tests {
             "the window shrank to {:?}",
             r.size()
         );
+    }
+
+    // --- help overlay: a standalone, non-modal resident window (ADR 0027) ---
+
+    #[test]
+    fn open_help_creates_a_centred_overlay_and_focuses_it() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        assert!(ed.help.is_none());
+        ed.open_help(&THEME(), None);
+        assert!(ed.help_focused());
+        let r = ed.help.as_ref().unwrap().window.bounds();
+        let ds = ed.desktop().size();
+        assert!(!r.is_empty());
+        assert!(r.width() <= ds.width && r.height() <= ds.height);
+        // Centred, not pinned to the top-left corner.
+        assert!(r.origin().x > 0 && r.origin().y > 0);
+    }
+
+    #[test]
+    fn open_help_again_while_open_just_refocuses_without_rebuilding() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.open_help(&THEME(), None);
+        let original = ed.help.as_ref().unwrap().window.bounds();
+        ed.defocus_help();
+        assert!(!ed.help_focused());
+        ed.open_help(&THEME(), None);
+        assert!(ed.help_focused());
+        assert_eq!(
+            ed.help.as_ref().unwrap().window.bounds(),
+            original,
+            "reused the existing window rather than rebuilding it"
+        );
+    }
+
+    #[test]
+    fn clicking_a_document_defocuses_an_open_help_window() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.new_window(&THEME());
+        ed.tile(); // window 0 = left half, window 1 = right half, both un-zoomed
+        ed.open_help(&THEME(), None);
+        assert!(ed.help_focused());
+        let help_rect = ed.help_rect_screen().unwrap();
+        // The tiled left window's own top-left corner — far from help's centred rect.
+        let doc_point = Point::new(2, 2);
+        assert!(
+            !help_rect.contains(doc_point),
+            "test setup: point must miss help, which was at {help_rect:?}"
+        );
+        left_click(&mut ed, doc_point.x, doc_point.y);
+        assert!(!ed.help_focused());
+    }
+
+    #[test]
+    fn clicking_the_help_window_on_an_empty_desktop_focuses_it() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.remove_active_window();
+        assert_eq!(ed.window_count(), 0);
+        ed.open_help(&THEME(), None);
+        ed.defocus_help();
+        assert!(!ed.help_focused());
+        let r = ed.help_rect_screen().unwrap();
+        let inside = Point::new(r.origin().x + r.width() / 2, r.origin().y + r.height() / 2);
+        left_click(&mut ed, inside.x, inside.y);
+        assert!(ed.help_focused(), "a click on the (unfocused) help window brings it back");
+    }
+
+    #[test]
+    fn clicking_the_help_close_glyph_posts_close() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.open_help(&THEME(), None);
+        let r = ed.help_rect_screen().unwrap();
+        let close_col = Frame::close_span(r.width(), false).unwrap().start;
+        let posted = left_click(&mut ed, r.origin().x + close_col, r.origin().y);
+        assert_eq!(posted, vec![CM_CLOSE]);
+    }
+
+    #[test]
+    fn zoom_glyph_is_never_hit_for_help() {
+        // With `zoomable: false`, `Frame` never draws a zoom glyph there at all
+        // (confirmed by the snapshot below), so the column it would otherwise
+        // occupy is just ordinary title-bar territory — a move, not a dead
+        // zone. The property this actually guards is that `ChromeHit::Zoom`
+        // itself is unreachable, not that the column does nothing.
+        let r = Rect::from_origin_size(Point::new(0, 0), Size::new(20, 10));
+        let zoom_col = Frame::zoom_span(r.width(), false).unwrap().start;
+        let hit = EditorApp::chrome_hit_at(r, Point::new(zoom_col, 0), false);
+        assert!(!matches!(hit, ChromeHit::Zoom));
+    }
+
+    #[test]
+    fn esc_closes_a_focused_help_window() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.open_help(&THEME(), None);
+        assert!(ed.help_focused());
+        keydown(&mut ed, KeyCode::Esc, Modifiers::NONE);
+        assert!(ed.help.is_none());
+    }
+
+    #[test]
+    fn activating_a_window_defocuses_help() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.new_window(&THEME());
+        ed.open_help(&THEME(), None);
+        assert!(ed.help_focused());
+        ed.activate(0);
+        assert!(!ed.help_focused());
+    }
+
+    #[test]
+    fn dragging_the_help_title_bar_moves_it() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.open_help(&THEME(), None);
+        let before = ed.help.as_ref().unwrap().window.bounds();
+        let r = ed.help_rect_screen().unwrap();
+        let grab = Point::new(r.origin().x + r.width() / 2, r.origin().y); // mid title bar
+        left_click(&mut ed, grab.x, grab.y);
+        drag_to(&mut ed, grab.x - 5, grab.y + 3);
+        release(&mut ed, grab.x - 5, grab.y + 3);
+        let after = ed.help.as_ref().unwrap().window.bounds();
+        assert_ne!(
+            after.origin(),
+            before.origin(),
+            "the title-bar drag moved the window"
+        );
+        assert_eq!(after.size(), before.size(), "a move must not resize");
+        assert!(
+            ed.help.as_ref().unwrap().drag.is_none(),
+            "the release ends the drag"
+        );
+    }
+
+    #[test]
+    fn dragging_the_help_corner_resizes_it() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.open_help(&THEME(), None);
+        let r = ed.help_rect_screen().unwrap();
+        let corner = r.bottom_right().offset(-1, -1);
+        left_click(&mut ed, corner.x, corner.y);
+        drag_to(&mut ed, corner.x - 10, corner.y - 5);
+        release(&mut ed, corner.x - 10, corner.y - 5);
+        let after = ed.help.as_ref().unwrap().window.bounds();
+        assert!(
+            after.width() < r.width() && after.height() < r.height(),
+            "the corner drag shrank the window to {:?}",
+            after.size()
+        );
+    }
+
+    #[test]
+    fn relayout_clamps_an_out_of_bounds_help_window() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        ed.open_help(&THEME(), None);
+        ed.relayout(Size::new(20, 10)); // much smaller terminal
+        let r = ed.help.as_ref().unwrap().window.bounds();
+        let ds = ed.desktop().size();
+        assert!(r.width() <= ds.width && r.height() <= ds.height);
+        assert!(r.origin().x + r.width() <= ds.width);
+        assert!(r.origin().y + r.height() <= ds.height);
+    }
+
+    /// A backend whose `poll_event` fails immediately — used to prove
+    /// `close()` never reaches `confirm_discard`'s `exec_view` prompt when a
+    /// focused help window (not a document) is what's being closed. If it did,
+    /// this test would error out (or hang, against a backend that returns
+    /// `Ok(None)` forever) instead of passing.
+    struct NoPollBackend;
+
+    impl Backend for NoPollBackend {
+        fn size(&self) -> Size {
+            Size::new(80, 24)
+        }
+        fn present(&mut self, _frame: &Buffer) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl EventSource for NoPollBackend {
+        fn poll_event(&mut self, _timeout: std::time::Duration) -> io::Result<Option<Event>> {
+            Err(io::Error::other(
+                "close() must not prompt when help (not a document) is focused",
+            ))
+        }
+    }
+
+    #[test]
+    fn close_command_closes_a_focused_help_window_without_the_discard_guard() {
+        let mut ed = EditorApp::new(Size::new(80, 24), &THEME());
+        type_chars(&mut ed, "unsaved"); // dirty the document — would normally prompt
+        assert!(ed.is_modified());
+        ed.open_help(&THEME(), None);
+        assert!(ed.help_focused());
+        let mut sys = Application::new(NoPollBackend);
+        close(&mut sys, &mut ed, &THEME()).unwrap();
+        assert!(ed.help.is_none(), "help closed");
+        assert_eq!(ed.window_count(), 1, "the document was untouched");
+        assert!(ed.is_modified(), "the document's unsaved changes are untouched");
+    }
+
+    #[test]
+    fn snapshot_help_window_open_and_focused_over_a_document() {
+        let mut ed = EditorApp::new(Size::new(60, 20), &THEME());
+        ed.active_editor_mut().set_text("hello world");
+        ed.open_help(&THEME(), None);
+        let mut buf = Buffer::new(Size::new(60, 20));
+        ed.draw_canvas(&mut Canvas::new(&mut buf));
+        insta::assert_snapshot!(buf.to_text());
     }
 }

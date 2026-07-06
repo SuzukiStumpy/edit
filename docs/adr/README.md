@@ -26,5 +26,7 @@ below) and haven't been split out yet.
 | [0021](0021-system-clipboard-osc52-write-only.md) | System clipboard via OSC 52, write-only (`Backend::set_clipboard`) *(straddles; the seam it uses lives in rvision)* |
 | [0024](0024-release-versioning-ci.md) | Release-please + lockstep workspace version; hand-rolled cross-platform build on release *(straddles; predates the split)* |
 | [0025](0025-settings-key-value-config-dir.md) | Settings: hand-rolled key-value file in the platform config dir |
+| [0026](0026-adopt-rvision-help-window-and-resource-loading.md) | Adopt `rvision`'s `HelpWindow` and `resource` module, retiring their `edit`-side equivalents *(help-viewer half superseded by ADR 0027)* |
+| [0027](0027-help-window-non-modal-resident-overlay.md) | The help window is a non-modal, resident, standalone overlay — not `exec_view`d |
 
 New decision? Copy [`0000-template.md`](0000-template.md).

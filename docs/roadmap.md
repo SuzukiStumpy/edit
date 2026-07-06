@@ -434,18 +434,24 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
     (`Block = Paragraph(String) | Preformatted(Vec<String>)`), a reusable
     **`HelpPane`** page renderer (reflows prose via `wrap`, keeps `<pre>`
     verbatim, conditional scroll bar), and a framework-standard **`CM_HELP`**.
-    `edit` supplies the content (`include_str!`'d) and a **modal** two-pane viewer
-    (contents `ListBox` + `HelpPane`, live-update on selection) run via
-    `exec_view` (ADR 0017/0018), opened by F1 / a new Help ▸ Help Topics item via
-    `open_help(initial: Option<&str>)` — the context-sensitivity seam (`None` =
-    home for now). v1 topics: Overview, Keyboard & mouse, Clipboard (documents the
-    Ctrl+V internal vs Ctrl+Shift+V system convention, ADR 0021/0022), Files,
-    Find & Replace.
+    `edit` supplies the content (`include_str!`'d) and, at the time, a **modal**
+    hand-rolled two-pane viewer (contents `ListBox` + `HelpPane`, live-update on
+    selection) run via `exec_view` (ADR 0017/0018), opened by F1 / a new Help ▸
+    Help Topics item via `open_help(initial: Option<&str>)` — the
+    context-sensitivity seam (`None` = home for now). v1 topics: Overview,
+    Keyboard & mouse, Clipboard (documents the Ctrl+V internal vs Ctrl+Shift+V
+    system convention, ADR 0021/0022), Files, Find & Replace. **Retired
+    2026-07-06**: `edit`'s hand-rolled viewer is gone; `open_help` now builds
+    `rvision`'s own `HelpWindow` directly (ADR 0026), hosted as a **non-modal,
+    resident, movable/resizable/closable overlay** in `edit`'s own hand-rolled
+    MDI rather than run via `exec_view` (ADR 0027 supersedes ADR 0026's
+    original `exec_view` choice for this one window — the drawn resize/close
+    chrome needs to actually work, not just be present).
   - *Deferred to their own work:* **full hypertext** (followable links — the
-    format already reserves the syntax); the **`rvision` default `HelpWindow`**
-    desktop-window container and **context-sensitive** topics (both wait on the
-    windowing question in the backlog, so the framework window is built once on
-    the right windowing architecture).
+    format already reserves the syntax); **context-sensitive** topics; **full
+    MDI integration** (Window menu/F6/Alt+N — ADR 0027 scoped the overlay as
+    standalone instead); the lost bottom hint row (needs a small additive
+    `rvision` change, ADR 0027's accepted gap).
 - Performance pass; rustdoc completeness; rounded-out `examples/`.
 - **Release & versioning** (ADR 0024). Conventional Commits (crate-scoped) drive
   **release-please**, which keeps an open release PR bumping a single workspace
@@ -462,11 +468,14 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
 ## Deferred decisions (settled when their phase arrives)
 
 - **System clipboard** — internal → OSC 52 ✅ write-only (Phase 7 / 10, ADR 0021).
-- **Settings format** — hand-rolled key-value ✅ (Phase 10, ADR 0025).
+- **Settings format** — hand-rolled key-value ✅ (Phase 10, ADR 0025); the file's
+  *location* now resolves via `rvision::resource::user_resource_path` rather than
+  hand-rolled per-OS logic (ADR 0026), format unchanged.
 - **Help system** — TV's hypertext help is large; ship a simplified *topic-list*
-  viewer first (Phase 10, `docs/specs/help.md`). Full hypertext and a non-modal
-  desktop help window are deferred (the latter waits on the windowing question in
-  the Backlog).
+  viewer first (Phase 10, `docs/specs/help.md`) — originally `edit`'s own, now
+  `rvision`'s `HelpWindow` hosted as a non-modal resident overlay (ADR 0026/0027).
+  Full hypertext, context-sensitive topics, and full MDI integration (Window
+  menu/F6/Alt+N) are still deferred.
 - **Legacy encodings / gap buffer / rope** — behind their seams (decode layer,
   `TextBuffer` trait); add only if a real need appears, each via a new ADR.
 - **`rvision` versioning** — lockstep with `edit` under one workspace version now;
