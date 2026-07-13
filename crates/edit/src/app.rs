@@ -19,7 +19,7 @@ use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{
-    Accelerator, Command, CommandSet, CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES,
+    Accelerator, CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet,
 };
 use rvision::event::{
     Event, EventResult, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
@@ -33,14 +33,14 @@ use rvision::widgets::{
     ScrollPart, StatusItem, StatusLine,
 };
 
-use crate::dialogs::{FindDialog, GoToLine, ReplaceDialog, SettingsDialog, CM_DEFAULTS};
+use crate::dialogs::{CM_DEFAULTS, FindDialog, GoToLine, ReplaceDialog, SettingsDialog};
 use crate::editor::{
-    EditorView, CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_REPLACE,
-    CM_UNDO,
+    CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_REPLACE, CM_UNDO,
+    EditorView,
 };
 use crate::file::{self, Encoding};
 use crate::help::HELP_TEXT;
-use crate::settings::{Settings, MAX_RECENT};
+use crate::settings::{MAX_RECENT, Settings};
 
 /// File ▸ New.
 pub const CM_NEW: Command = Command(CM_USER + 1);
@@ -2306,7 +2306,7 @@ mod tests {
     fn the_edit_menu_lists_settings_last() {
         let mut ed = app();
         keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit (Undo highlighted)
-                                                              // Undo, Redo, Cut, Copy, Paste, Settings — five Downs to reach Settings.
+        // Undo, Redo, Cut, Copy, Paste, Settings — five Downs to reach Settings.
         for _ in 0..5 {
             keydown(&mut ed, KeyCode::Down, Modifiers::NONE);
         }
