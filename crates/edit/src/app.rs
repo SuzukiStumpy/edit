@@ -13,7 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rvision::app::{Application, Program};
-use rvision::arrange;
+use rvision::arrange::{self, ChromeFlags, ChromeHit};
 use rvision::backend::{Backend, EventSource};
 use rvision::buffer::Buffer;
 use rvision::canvas::Canvas;
@@ -222,20 +222,6 @@ enum Drag {
     /// Dragging a scroll-bar thumb: the bar's axis. The active window scrolls so
     /// its thumb follows the pointer (`ScrollBar::pos_at` inverts the placement).
     ScrollThumb { orientation: Orientation },
-}
-
-/// Where on a window's chrome a press landed (Phase 9d).
-enum ChromeHit {
-    /// The close glyph — request a close (through the discard guard).
-    Close,
-    /// The zoom glyph — toggle maximise.
-    Zoom,
-    /// The bottom-right corner — start a resize drag.
-    Resize,
-    /// The title bar — start a move drag.
-    Move,
-    /// Not on actionable chrome (interior, scroll bar, or plain border).
-    None,
 }
 
 /// The three chrome regions for a terminal of `size`.
@@ -640,29 +626,22 @@ impl EditorApp {
     /// `Rect` math with no `Document` access, so the help overlay (ADR 0027)
     /// reuses it directly against its own screen rect. `zoomable` gates
     /// whether the zoom-glyph span is tested at all — the help window has no
-    /// zoom glyph to hit.
+    /// zoom glyph to hit. `edit`'s windows are always moveable/resizable/
+    /// closable and never draw a context-help glyph (ADR 0021's `F1` glyph is
+    /// a `rvision::widgets::Window` feature this bespoke chrome doesn't use,
+    /// ADR 0028) — only `zoomable` varies between a `Document` and help.
     fn chrome_hit_at(r: Rect, pos: Point, zoomable: bool) -> ChromeHit {
-        let (w, h) = (r.width(), r.height());
-        let lx = pos.x - r.origin().x;
-        let ly = pos.y - r.origin().y;
-        if ly == 0 {
-            // `edit`'s own windows never draw a help glyph (ADR 0021's `F1`
-            // glyph is a `rvision::widgets::Window` feature this bespoke
-            // chrome doesn't use), so the spans never shift for one.
-            if Frame::close_span(w, false).is_some_and(|s| s.contains(&lx)) {
-                return ChromeHit::Close;
-            }
-            if zoomable && Frame::zoom_span(w, false).is_some_and(|s| s.contains(&lx)) {
-                return ChromeHit::Zoom;
-            }
-        }
-        if lx == w - 1 && ly == h - 1 {
-            return ChromeHit::Resize;
-        }
-        if ly == 0 && lx >= 1 && lx < w - 1 {
-            return ChromeHit::Move;
-        }
-        ChromeHit::None
+        arrange::chrome_hit(
+            r,
+            pos,
+            ChromeFlags {
+                moveable: true,
+                resizable: true,
+                closable: true,
+                zoomable,
+                has_help: false,
+            },
+        )
     }
 
     /// Restores a maximised active window to the full desktop as its `normal` rect
@@ -1291,6 +1270,10 @@ impl EditorApp {
                     ChromeHit::Zoom => self.toggle_zoom(),
                     ChromeHit::Move => self.start_move(mouse.pos),
                     ChromeHit::Resize => self.start_resize(mouse.pos),
+                    // Unreachable: a Document's ChromeFlags always sets
+                    // has_help: false (ADR 0028) — no context-help glyph is
+                    // ever drawn for `chrome_hit` to land on.
+                    ChromeHit::Help => {}
                     // A scroll bar scrolls (and the thumb starts a drag); otherwise
                     // an interior press places the caret and begins a selection.
                     ChromeHit::None => {
@@ -1376,6 +1359,7 @@ impl EditorApp {
         match Self::chrome_hit_at(help_rect, mouse.pos, false) {
             ChromeHit::Close => ctx.post(CM_CLOSE),
             ChromeHit::Zoom => {} // unreachable: help is built with `.zoomable(false)`
+            ChromeHit::Help => {} // unreachable: help's own ChromeFlags sets has_help: false
             ChromeHit::Move => self.start_help_move(mouse.pos),
             ChromeHit::Resize => self.start_help_resize(mouse.pos),
             ChromeHit::None => {
