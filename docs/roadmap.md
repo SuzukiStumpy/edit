@@ -507,8 +507,14 @@ ordered by how much shared machinery they need.
   (ADR 0027) — the geometry duplication that produced was resolved by adopting
   `rvision::arrange` for chrome hit-testing, drag/resize sessions, and cascade/tile
   layout (ADR 0028), so the two implementations now share their arrangement math.
-  **What's still open**: the *ownership* question — converge the two (and how: IDs
-  + a registry? a window-kind enum? generics over the interior?), or accept the
-  split deliberately — is exactly as unresolved as before ADR 0028, which
-  deliberately left it untouched. Touches rvision's ADRs 0003, 0016 and `edit`'s
-  ADR 0009, 0018, 0028, so it still deserves a dedicated grilling before any code.
+  **Update (2026-07-13):** a grilling session on the *ownership* question picked
+  a mechanism — `Any`-based downcast access to a `Window`'s interior content,
+  added to `rvision` generically (rvision's ADR 0036, superseding ADR 0018's
+  downcast rejection specifically). Deliberately scoped to *just* the
+  mechanism: `Desktop` is still unused by `edit`'s document MDI, and stays
+  that way. **What's still open**: whether/when `edit` actually migrates its
+  `Vec<Document>` MDI onto `Desktop`/`Window` — now technically unblocked, but
+  a separate, later decision (its own future grilling), not decided by ADR
+  0036. That migration would touch most of `app.rs`'s hand-rolled chrome/
+  dispatch and re-open ADR 0018's `exec_view`-reachability question, so it
+  deserves its own dedicated pass, not a rider on the mechanism decision.
