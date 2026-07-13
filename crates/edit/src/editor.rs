@@ -85,6 +85,8 @@ pub struct EditorView {
     /// every step of a window drag, which never touches `doc` at all — so a full
     /// per-line rescan there costs real, file-size-scaling latency for no reason.
     content_width: i16,
+    /// `Insert` toggles this (same convention as rvision's `TextArea`/`InputLine`).
+    overtype: bool,
 }
 
 impl EditorView {
@@ -106,6 +108,7 @@ impl EditorView {
             text_style: theme.style(Role::EditorText),
             selection_style: theme.style(Role::Selection),
             content_width: 0,
+            overtype: false,
         }
     }
 
@@ -148,6 +151,12 @@ impl EditorView {
     /// The caret position.
     pub fn cursor(&self) -> Position {
         self.cursor
+    }
+
+    /// Whether typing replaces the grapheme under the caret (overtype) rather
+    /// than inserting before it. `Insert` toggles this.
+    pub fn is_overtype(&self) -> bool {
+        self.overtype
     }
 
     /// The number of lines in the document (always at least 1).
@@ -694,13 +703,22 @@ impl EditorView {
 
     /// Inserts a single character at the caret (replacing any selection first). A
     /// run of plain typing coalesces into one undo unit; replacing a selection is
-    /// its own unit.
+    /// its own unit. In overtype mode, with no selection and a grapheme sitting
+    /// at the caret, that grapheme is deleted first (one undo unit with the
+    /// insert) rather than pushed right — except at a line's end, which has no
+    /// grapheme to replace and always falls back to a plain insert, so overtype
+    /// can extend a line but never eats the line break after it.
     fn insert_char(&mut self, c: char) {
         let before = self.cursor;
         let (mut edits, at, coalesce) = match self.selection_delete_edit() {
             Some((edit, start)) => (vec![edit], start, Coalesce::Standalone),
             None => (Vec::new(), self.cursor, Coalesce::Typing),
         };
+        if self.overtype && edits.is_empty() {
+            if let Some(existing) = self.grapheme_at(at) {
+                edits.push(Edit::delete(at, existing));
+            }
+        }
         edits.push(Edit::insert(at, c.to_string()));
         let after = Position::new(at.line, at.column + 1);
         self.commit(before, edits, after, coalesce);
@@ -952,13 +970,19 @@ impl View for EditorView {
             let selection = self.line_selection(line_index);
             self.draw_line(canvas, row, line, width, selection);
         }
-        // The caret: a reverse-video cell over the grapheme at the cursor (drawn
-        // last, only when focused — ADR 0017). No hardware cursor yet.
+        // The caret, drawn last, only when focused (ADR 0017): underlined in
+        // insert mode, reverse-video (a solid block) in overtype — the same
+        // convention as rvision's `TextArea`/`InputLine`. No hardware cursor yet.
         if self.focused {
             let cy = self.cursor.line as i16 - self.top as i16;
             let cx = self.cursor_display_col() - self.left;
             if cy >= 0 && cy < height && cx >= 0 && cx < width {
-                let style = self.text_style.attrs(Attributes::REVERSE);
+                let caret_attrs = if self.overtype {
+                    Attributes::REVERSE
+                } else {
+                    Attributes::UNDERLINE
+                };
+                let style = self.text_style.attrs(caret_attrs);
                 let cell = match self.grapheme_at(self.cursor) {
                     Some(ref g) if g != "\t" => Cell::new(Grapheme::new(g), style),
                     _ => Cell::blank(style),
@@ -1015,6 +1039,12 @@ impl View for EditorView {
             // Find Next/Previous repeat the last search — editor-local, like undo.
             KeyCode::F(3) if !ctrl && !alt => {
                 self.find_next(shift);
+                EventResult::Consumed
+            }
+            // Plain Insert toggles overtype — Ctrl+Insert/Shift+Insert are
+            // already claimed above (Copy/Paste) and never reach this arm.
+            KeyCode::Insert => {
+                self.overtype = !self.overtype;
                 EventResult::Consumed
             }
             KeyCode::Char(c) if !c.is_control() && !ctrl && !alt => {
@@ -1096,6 +1126,18 @@ impl View for EditorView {
 
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    /// `"<1-based line> : <1-based column>   INS"`/`"OVR"` — the same format
+    /// as rvision's `TextArea`/`InputLine` (ADR 0032), so a host drawing one
+    /// alongside the other reads consistently.
+    fn status_text(&self) -> Option<String> {
+        let mode = if self.overtype { "OVR" } else { "INS" };
+        Some(format!(
+            "{} : {}   {mode}",
+            self.cursor.line + 1,
+            self.cursor.column + 1
+        ))
     }
 }
 
@@ -1191,6 +1233,87 @@ mod tests {
         type_str(&mut e, "b");
         assert_eq!(e.text(), "a\tb");
         assert_eq!(e.cursor(), Position::new(0, 3));
+    }
+
+    // --- overtype mode ---
+
+    #[test]
+    fn insert_key_toggles_overtype_mode() {
+        let mut e = editor(20, 5);
+        assert!(!e.is_overtype(), "insert mode is the default");
+        key(&mut e, KeyCode::Insert);
+        assert!(e.is_overtype());
+        key(&mut e, KeyCode::Insert);
+        assert!(!e.is_overtype());
+    }
+
+    #[test]
+    fn typing_in_overtype_mode_replaces_the_grapheme_under_the_cursor() {
+        let mut e = editor(20, 5).clone_doc("abc");
+        key(&mut e, KeyCode::Insert);
+        type_str(&mut e, "X");
+        assert_eq!(e.text(), "Xbc");
+        assert_eq!(e.cursor(), Position::new(0, 1));
+    }
+
+    #[test]
+    fn overtype_at_end_of_line_falls_back_to_a_plain_insert() {
+        let mut e = editor(20, 5).clone_doc("ab");
+        key(&mut e, KeyCode::End);
+        key(&mut e, KeyCode::Insert);
+        type_str(&mut e, "c");
+        assert_eq!(
+            e.text(),
+            "abc",
+            "no grapheme to replace, so it extends the line"
+        );
+    }
+
+    #[test]
+    fn overtype_never_deletes_across_a_line_break() {
+        let mut e = editor(20, 5).clone_doc("ab\ncd");
+        key(&mut e, KeyCode::End); // end of line 0
+        key(&mut e, KeyCode::Insert);
+        type_str(&mut e, "X");
+        assert_eq!(
+            e.text(),
+            "abX\ncd",
+            "pushes right rather than eating the line break"
+        );
+    }
+
+    #[test]
+    fn overtype_replacing_a_selection_behaves_like_insert() {
+        let mut e = editor(20, 5).clone_doc("abcd");
+        key(&mut e, KeyCode::Insert);
+        press(&mut e, KeyCode::Right, Modifiers::SHIFT);
+        press(&mut e, KeyCode::Right, Modifiers::SHIFT); // select "ab"
+        type_str(&mut e, "X");
+        assert_eq!(
+            e.text(),
+            "Xcd",
+            "the whole selection is replaced, not one grapheme"
+        );
+    }
+
+    #[test]
+    fn undo_after_an_overtype_keystroke_restores_the_replaced_grapheme() {
+        let mut e = editor(20, 5).clone_doc("abc");
+        key(&mut e, KeyCode::Insert);
+        type_str(&mut e, "X");
+        assert_eq!(e.text(), "Xbc");
+        assert!(e.undo());
+        assert_eq!(e.text(), "abc", "both halves of the overtype undo together");
+        assert_eq!(e.cursor(), Position::new(0, 0));
+    }
+
+    #[test]
+    fn ctrl_and_shift_insert_still_post_clipboard_commands_not_toggle_overtype() {
+        let mut e = editor(20, 5);
+        press(&mut e, KeyCode::Insert, Modifiers::CONTROL);
+        assert!(!e.is_overtype(), "Ctrl+Insert is Copy, not the toggle");
+        press(&mut e, KeyCode::Insert, Modifiers::SHIFT);
+        assert!(!e.is_overtype(), "Shift+Insert is Paste, not the toggle");
     }
 
     #[test]
@@ -1669,9 +1792,9 @@ mod tests {
     }
 
     #[test]
-    fn caret_is_reverse_video_only_when_focused() {
+    fn caret_is_underlined_in_insert_mode_only_when_focused() {
         let mut e = editor(10, 1).clone_doc("hi"); // caret at (0,0) over 'h'
-        let reverse_at = |e: &EditorView| {
+        let underlined_at = |e: &EditorView| {
             let mut buf = Buffer::new(Size::new(10, 1));
             let mut canvas = Canvas::new(&mut buf);
             e.draw(&mut canvas);
@@ -1679,11 +1802,30 @@ mod tests {
                 .unwrap()
                 .style()
                 .attrs
-                .contains(Attributes::REVERSE)
+                .contains(Attributes::UNDERLINE)
         };
-        assert!(reverse_at(&e), "focused: a reverse-video caret");
+        assert!(
+            underlined_at(&e),
+            "focused, insert mode: an underlined caret"
+        );
         e.set_focused(false);
-        assert!(!reverse_at(&e), "unfocused: no caret");
+        assert!(!underlined_at(&e), "unfocused: no caret");
+    }
+
+    #[test]
+    fn caret_is_reverse_video_in_overtype_mode() {
+        let mut e = editor(10, 1).clone_doc("hi"); // caret at (0,0) over 'h'
+        key(&mut e, KeyCode::Insert); // toggle to overtype
+        let mut buf = Buffer::new(Size::new(10, 1));
+        let mut canvas = Canvas::new(&mut buf);
+        e.draw(&mut canvas);
+        assert!(
+            buf.get(Point::new(0, 0))
+                .unwrap()
+                .style()
+                .attrs
+                .contains(Attributes::REVERSE)
+        );
     }
 
     /// Test helper: build a fresh focused editor with `text` loaded.
