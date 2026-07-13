@@ -392,10 +392,8 @@ remaining refinement is dragging a scroll-bar thumb (noted under 9d).
   - *Closeable to an empty desktop.* Closing the last window no longer resets it
     to a fresh Untitled — the desktop can be emptied; New/Open spawn a window
     again, and document-dependent commands/keys quietly no-op while it is empty.
-- Verify on Windows and macOS; iron out terminal quirks. *Partial:* manually
-  verified on Linux, Windows x86_64, and Intel macOS; Apple-silicon macOS still
-  unverified (CI builds all four — 9dc13a5 — but the TUI/terminal-quirk pass on
-  that platform is pending hardware).
+- **Cross-platform verification ✅** — manually verified on Linux, Windows
+  x86_64, Intel macOS, and Apple-silicon macOS (CI builds all four — 9dc13a5).
 - **Clipboard ↔ host ✅** — *out:* Cut/Copy mirror to the host clipboard (works
   over SSH) via `Backend::set_clipboard` + a hand-rolled Base64 `osc52` encoder
   (no crate); OSC 52 read-back is left behind the seam as fragile/terminal-gated
