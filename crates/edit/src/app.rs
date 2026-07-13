@@ -19,7 +19,7 @@ use rvision::canvas::Canvas;
 use rvision::cell::Cell;
 use rvision::color::Style;
 use rvision::command::{
-    Accelerator, CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES, Command, CommandSet,
+    Accelerator, Command, CommandSet, CM_HELP, CM_NO, CM_OK, CM_QUIT, CM_USER, CM_YES,
 };
 use rvision::event::{
     Event, EventResult, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
@@ -33,14 +33,14 @@ use rvision::widgets::{
     ScrollPart, StatusItem, StatusLine,
 };
 
-use crate::dialogs::{CM_DEFAULTS, FindDialog, GoToLine, ReplaceDialog, SettingsDialog};
+use crate::dialogs::{FindDialog, GoToLine, ReplaceDialog, SettingsDialog, CM_DEFAULTS};
 use crate::editor::{
-    CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_REPLACE, CM_UNDO,
-    EditorView,
+    EditorView, CM_COPY, CM_CUT, CM_FIND, CM_FIND_NEXT, CM_GOTO, CM_PASTE, CM_REDO, CM_REPLACE,
+    CM_UNDO,
 };
 use crate::file::{self, Encoding};
 use crate::help::HELP_TEXT;
-use crate::settings::{MAX_RECENT, Settings};
+use crate::settings::{Settings, MAX_RECENT};
 
 /// File ▸ New.
 pub const CM_NEW: Command = Command(CM_USER + 1);
@@ -1379,11 +1379,7 @@ impl EditorApp {
             // Releasing ends any window/thumb/help drag or selection (the editor
             // needs no release of its own).
             MouseKind::Up(MouseButton::Left) => {
-                let help_was_dragging = self
-                    .help
-                    .as_mut()
-                    .and_then(|h| h.drag.take())
-                    .is_some();
+                let help_was_dragging = self.help.as_mut().and_then(|h| h.drag.take()).is_some();
                 let was_active = help_was_dragging || self.drag.take().is_some() || self.selecting;
                 self.selecting = false;
                 if was_active {
@@ -1417,7 +1413,12 @@ impl EditorApp {
     /// document's chrome (close/move/resize) or forwards it into the window's
     /// own interior. Always returns [`EventResult::Consumed`], matching the
     /// document press branch's shape.
-    fn handle_help_press(&mut self, help_rect: Rect, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
+    fn handle_help_press(
+        &mut self,
+        help_rect: Rect,
+        mouse: &MouseEvent,
+        ctx: &mut Context,
+    ) -> EventResult {
         self.focus_help();
         self.selecting = false;
         match Self::chrome_hit_at(help_rect, mouse.pos, false) {
@@ -1435,7 +1436,12 @@ impl EditorApp {
     /// Forwards `mouse` (already known to be within `help_rect`) into the help
     /// window, translated to its own local coordinates — mirrors how
     /// `Application::exec_view` translates a mouse event for a modal `Window`.
-    fn forward_to_help(&mut self, help_rect: Rect, mouse: &MouseEvent, ctx: &mut Context) -> EventResult {
+    fn forward_to_help(
+        &mut self,
+        help_rect: Rect,
+        mouse: &MouseEvent,
+        ctx: &mut Context,
+    ) -> EventResult {
         let origin = help_rect.origin();
         let local = MouseEvent {
             pos: mouse.pos.offset(-origin.x, -origin.y),
@@ -2300,7 +2306,7 @@ mod tests {
     fn the_edit_menu_lists_settings_last() {
         let mut ed = app();
         keydown(&mut ed, KeyCode::Char('e'), Modifiers::ALT); // open Edit (Undo highlighted)
-        // Undo, Redo, Cut, Copy, Paste, Settings — five Downs to reach Settings.
+                                                              // Undo, Redo, Cut, Copy, Paste, Settings — five Downs to reach Settings.
         for _ in 0..5 {
             keydown(&mut ed, KeyCode::Down, Modifiers::NONE);
         }
@@ -3394,7 +3400,10 @@ mod tests {
         let r = ed.help_rect_screen().unwrap();
         let inside = Point::new(r.origin().x + r.width() / 2, r.origin().y + r.height() / 2);
         left_click(&mut ed, inside.x, inside.y);
-        assert!(ed.help_focused(), "a click on the (unfocused) help window brings it back");
+        assert!(
+            ed.help_focused(),
+            "a click on the (unfocused) help window brings it back"
+        );
     }
 
     #[test]
@@ -3526,7 +3535,10 @@ mod tests {
         close(&mut sys, &mut ed, &THEME()).unwrap();
         assert!(ed.help.is_none(), "help closed");
         assert_eq!(ed.window_count(), 1, "the document was untouched");
-        assert!(ed.is_modified(), "the document's unsaved changes are untouched");
+        assert!(
+            ed.is_modified(),
+            "the document's unsaved changes are untouched"
+        );
     }
 
     #[test]
