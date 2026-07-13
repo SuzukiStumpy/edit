@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/SuzukiStumpy/edit/compare/v1.1.1...v1.2.0) (2026-07-13)
+
+
+### Features
+
+* **edit:** add a status panel for cursor position and mode ([24bb816](https://github.com/SuzukiStumpy/edit/commit/24bb816efa0efdb54a66005286badb06c0e77154))
+* **edit:** respect insert/overtype mode, with a visual caret change ([9963030](https://github.com/SuzukiStumpy/edit/commit/996303098f11677b4abf92cea0f3cabdb198f35e))
+
 ## [1.1.1](https://github.com/SuzukiStumpy/edit/compare/v1.1.0...v1.1.1) (2026-07-13)
 
 
