@@ -13,6 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rvision::app::{Application, Program};
+use rvision::arrange;
 use rvision::backend::{Backend, EventSource};
 use rvision::buffer::Buffer;
 use rvision::canvas::Canvas;
@@ -277,35 +278,10 @@ fn hscroll_rect(size: Size) -> Rect {
 }
 
 /// The smallest window that still has a usable interior (a 1-cell border plus at
-/// least one interior cell).
+/// least one interior cell). `rvision::arrange`'s own functions take this as a
+/// caller-supplied `min_size` rather than a hardcoded floor, since `Desktop` and
+/// `edit` have always disagreed on it (ADR 0028).
 const MIN_WINDOW: Size = Size::new(3, 3);
-
-/// `rect` clamped to fit within a `bounds`-sized area at the origin: the size is
-/// capped and the origin pulled back so the rectangle stays fully on the desktop.
-fn clamp_rect(rect: Rect, bounds: Size) -> Rect {
-    let w = rect.width().clamp(0, bounds.width.max(0));
-    let h = rect.height().clamp(0, bounds.height.max(0));
-    let x = rect.origin().x.clamp(0, (bounds.width - w).max(0));
-    let y = rect.origin().y.clamp(0, (bounds.height - h).max(0));
-    Rect::from_origin_size(Point::new(x, y), Size::new(w, h))
-}
-
-/// A cascade slot (desktop-local) for the `i`-th window on a `desktop`-sized area:
-/// stepped down-right from the top-left and extending to the bottom-right corner,
-/// so window 0 fills the desktop and later windows peek out behind it. The step
-/// wraps so a long stack never marches off-screen.
-fn cascade_slot(desktop: Size, i: usize) -> Rect {
-    let step = (i % 8) as i16;
-    let x = (step * 2).min((desktop.width - MIN_WINDOW.width).max(0));
-    let y = step.min((desktop.height - MIN_WINDOW.height).max(0));
-    clamp_rect(
-        Rect::from_origin_size(
-            Point::new(x, y),
-            Size::new(desktop.width - x, desktop.height - y),
-        ),
-        desktop,
-    )
-}
 
 /// The command posted by the `index`-th recent-files menu entry.
 fn recent_command(index: usize) -> Command {
@@ -546,10 +522,11 @@ impl EditorApp {
         self.status_line.set_bounds(r.status);
         let ds = r.desktop.size();
         for doc in &mut self.documents {
-            doc.normal = clamp_rect(doc.normal, ds);
+            doc.normal = arrange::clamp_rect(doc.normal, ds);
         }
         if let Some(help) = &mut self.help {
-            help.window.set_bounds(clamp_rect(help.window.bounds(), ds));
+            help.window
+                .set_bounds(arrange::clamp_rect(help.window.bounds(), ds));
         }
         self.sync_layout();
     }
@@ -567,7 +544,7 @@ impl EditorApp {
         if self.zoomed && i == self.active {
             Rect::from_origin_size(Point::new(0, 0), ds)
         } else {
-            clamp_rect(self.documents[i].normal, ds)
+            arrange::clamp_rect(self.documents[i].normal, ds)
         }
     }
 
@@ -751,7 +728,7 @@ impl EditorApp {
                 return;
             }
         };
-        self.documents[self.active].normal = clamp_rect(next, ds);
+        self.documents[self.active].normal = arrange::clamp_rect(next, ds);
         self.sync_layout();
     }
 
@@ -902,7 +879,7 @@ impl EditorApp {
                 Rect::from_origin_size(cur.origin(), Size::new(w, h))
             }
         };
-        help.window.set_bounds(clamp_rect(next, ds));
+        help.window.set_bounds(arrange::clamp_rect(next, ds));
     }
 
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
@@ -916,7 +893,7 @@ impl EditorApp {
             let local = if self.zoomed && i == self.active {
                 Rect::from_origin_size(Point::new(0, 0), ds)
             } else {
-                clamp_rect(self.documents[i].normal, ds)
+                arrange::clamp_rect(self.documents[i].normal, ds)
             };
             let screen =
                 Rect::from_origin_size(local.origin().offset(origin.x, origin.y), local.size());
@@ -1080,7 +1057,7 @@ impl EditorApp {
         // Every new document inherits the persisted tab width (ADR 0025); this is
         // the single choke point for the initial document, File ▸ New, and Open.
         doc.editor.set_tab_width(self.settings.tab_width);
-        doc.normal = cascade_slot(self.desktop().size(), self.documents.len());
+        doc.normal = arrange::cascade_slot(self.desktop().size(), self.documents.len(), MIN_WINDOW);
         self.documents.push(doc);
         self.active = self.documents.len() - 1;
         self.sync_layout();
@@ -1147,7 +1124,7 @@ impl EditorApp {
         self.zoomed = false;
         let ds = self.desktop().size();
         for (i, doc) in self.documents.iter_mut().enumerate() {
-            doc.normal = cascade_slot(ds, i);
+            doc.normal = arrange::cascade_slot(ds, i, MIN_WINDOW);
         }
         self.sync_layout();
     }
@@ -1157,34 +1134,9 @@ impl EditorApp {
     pub fn tile(&mut self) {
         self.zoomed = false;
         let ds = self.desktop().size();
-        let n = self.documents.len();
-        // Roughly square grid; the last (possibly short) row stretches to fill.
-        let cols = (1..=n).find(|c| c * c >= n).unwrap_or(1);
-        let rows = n.div_ceil(cols);
-        for i in 0..n {
-            let row = i / cols;
-            let col = i % cols;
-            let cols_in_row = if row + 1 == rows {
-                n - cols * row
-            } else {
-                cols
-            };
-            let cell_w = ds.width / cols_in_row as i16;
-            let cell_h = ds.height / rows as i16;
-            let x = cell_w * col as i16;
-            let y = cell_h * row as i16;
-            // The last column/row absorbs the integer-division remainder.
-            let w = if col + 1 == cols_in_row {
-                ds.width - x
-            } else {
-                cell_w
-            };
-            let h = if row + 1 == rows {
-                ds.height - y
-            } else {
-                cell_h
-            };
-            self.documents[i].normal = Rect::from_origin_size(Point::new(x, y), Size::new(w, h));
+        let rects = arrange::tile(ds, self.documents.len());
+        for (doc, rect) in self.documents.iter_mut().zip(rects) {
+            doc.normal = rect;
         }
         self.sync_layout();
     }
