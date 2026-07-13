@@ -31,7 +31,7 @@ use rvision::theme::{Role, Theme};
 use rvision::view::{Context, View};
 use rvision::widgets::{
     FileDialog, Frame, HelpWindow, Menu, MenuBar, MenuItem, MessageBox, Orientation, ScrollBar,
-    ScrollPart, StatusItem, StatusLine,
+    ScrollPart, StatusItem, StatusLine, StatusPanel,
 };
 
 use crate::dialogs::{CM_DEFAULTS, FindDialog, GoToLine, ReplaceDialog, SettingsDialog};
@@ -182,6 +182,9 @@ pub struct EditorApp {
     inactive_title_style: Style,
     shadow_style: Style,
     backdrop: Cell,
+    /// The base status-bar colour, reused for the row/col + mode panel
+    /// (`document_status_text`) so it reads as part of the same bar.
+    status_bar_style: Style,
     /// The help window, if open — a standalone singleton overlay (ADR 0027),
     /// not a member of `documents`: it never joins the Window menu, F6 cycle,
     /// or Alt+1..9, but is otherwise a real resident window (move/resize/close).
@@ -235,6 +238,33 @@ fn regions(size: Size) -> Regions {
         desktop: Rect::from_origin_size(Point::new(0, 1), Size::new(w, (h - 2).max(0))),
         status: Rect::from_origin_size(Point::new(0, (h - 1).max(0)), Size::new(w, 1)),
     }
+}
+
+/// Splits the status row into `(status-line rect, panel)`: with no panel text,
+/// the status line keeps the whole row and there is no panel; otherwise the
+/// panel reserves up to [`StatusPanel::DEFAULT_WIDTH`] columns on the right
+/// (clamped to what's actually available), and the status line keeps the
+/// rest — mirroring `rvision::widgets::Window`'s own status-panel reservation
+/// (ADR 0032), just right-aligned instead of left, since the status line's
+/// hints already grow rightward from the left edge. No awareness of how much
+/// room the status line's own hints actually need: on a narrow terminal the
+/// panel can crowd out a hint's tail (same category of tradeoff `Window`
+/// accepts between its own status panel and horizontal scroll bar).
+fn status_layout(status: Rect, panel_text: Option<String>) -> (Rect, Option<(Rect, String)>) {
+    let Some(text) = panel_text else {
+        return (status, None);
+    };
+    let panel_width = status.width().min(StatusPanel::DEFAULT_WIDTH);
+    if panel_width <= 0 {
+        return (status, None);
+    }
+    let line_width = status.width() - panel_width;
+    let line_rect = Rect::from_origin_size(status.origin(), Size::new(line_width, status.height()));
+    let panel_rect = Rect::from_origin_size(
+        status.origin().offset(line_width, 0),
+        Size::new(panel_width, status.height()),
+    );
+    (line_rect, Some((panel_rect, text)))
 }
 
 /// `rect` inset by one cell on every side (the window border) — its interior.
@@ -399,6 +429,7 @@ impl EditorApp {
             inactive_title_style: theme.style(Role::WindowTitleInactive),
             shadow_style: theme.style(Role::Shadow),
             backdrop: Cell::from_char('░', theme.style(Role::DesktopBackground)),
+            status_bar_style: theme.style(Role::StatusBar),
             help: None,
             help_focused: false,
         };
@@ -881,6 +912,17 @@ impl EditorApp {
     /// The active document's editor view.
     pub fn active_editor(&self) -> &EditorView {
         &self.doc().editor
+    }
+
+    /// The text for the app-wide status panel: the active document's
+    /// row/col + insert-overtype mode, or `None` when there's no active
+    /// document window to report on — every document closed, or the help
+    /// overlay (ADR 0027) currently owns focus instead.
+    fn document_status_text(&self) -> Option<String> {
+        if self.documents.is_empty() || self.help_focused() {
+            return None;
+        }
+        self.active_editor().status_text()
     }
 
     /// The active document's editor view, mutably.
@@ -1522,7 +1564,13 @@ impl EditorApp {
                 }
             }
         }
-        self.status_line.draw(&mut canvas.child(r.status));
+        let (status_line_rect, panel) = status_layout(r.status, self.document_status_text());
+        self.status_line.draw(&mut canvas.child(status_line_rect));
+        if let Some((rect, text)) = panel {
+            let mut panel = StatusPanel::new(rect, self.status_bar_style);
+            panel.set_text(Some(text));
+            panel.draw(&mut canvas.child(rect));
+        }
         self.menu_bar.draw(&mut canvas.child(r.menu));
         // The open pull-down draws last, over everything (ADR 0016).
         self.menu_bar.draw_overlay(canvas);
@@ -2799,6 +2847,71 @@ mod tests {
             keydown(&mut ed, KeyCode::F(1), Modifiers::NONE),
             vec![CM_HELP]
         );
+    }
+
+    // --- status panel (app-wide row/col + mode indicator) ---
+
+    fn status_row_text(ed: &mut EditorApp) -> String {
+        let mut buf = Buffer::new(ed.size);
+        ed.draw(&mut buf);
+        buf.to_text().lines().last().unwrap_or("").to_string()
+    }
+
+    #[test]
+    fn status_panel_shows_the_active_documents_row_col_and_mode() {
+        let mut ed = app();
+        type_chars(&mut ed, "hi");
+        let row = status_row_text(&mut ed);
+        assert!(
+            row.contains("1 : 3   INS"),
+            "1-based line/col, insert mode by default: {row}"
+        );
+    }
+
+    #[test]
+    fn status_panel_reflects_overtype_mode() {
+        let mut ed = app();
+        run_key(&mut ed, KeyCode::Insert, Modifiers::NONE);
+        let row = status_row_text(&mut ed);
+        assert!(row.contains("1 : 1   OVR"), "{row}");
+    }
+
+    #[test]
+    fn status_panel_is_blank_when_every_document_is_closed() {
+        let mut ed = app();
+        ed.remove_active_window();
+        assert!(
+            !status_row_text(&mut ed).contains(" : "),
+            "no document, no panel"
+        );
+    }
+
+    #[test]
+    fn status_panel_is_blank_while_help_is_focused() {
+        let mut ed = app();
+        ed.open_help(&THEME(), None); // opens and focuses help (ADR 0027)
+        assert!(ed.help_focused());
+        assert!(
+            !status_row_text(&mut ed).contains(" : "),
+            "help owns focus, not a document"
+        );
+    }
+
+    #[test]
+    fn status_panel_reappears_once_help_loses_focus() {
+        let mut ed = app();
+        ed.open_help(&THEME(), None);
+        keydown(&mut ed, KeyCode::F(6), Modifiers::NONE); // cycle focus back to the document
+        assert!(!ed.help_focused());
+        assert!(status_row_text(&mut ed).contains("1 : 1   INS"));
+    }
+
+    #[test]
+    fn status_panel_leaves_the_status_lines_hints_undisturbed() {
+        let mut ed = app();
+        let row = status_row_text(&mut ed);
+        assert!(row.contains("F1"), "hints still draw: {row}");
+        assert!(row.contains("Help"));
     }
 
     #[test]
