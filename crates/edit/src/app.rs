@@ -1212,7 +1212,7 @@ impl EditorApp {
 
     /// Resolves a status-line hot-key to its command. `StatusLine` is now a pure
     /// display widget (its accelerators are meant to be bound into
-    /// `rvision::widgets::Desktop`'s global table, ADR 0028) — `EditorApp` runs
+    /// `rvision::widgets::Desktop`'s global table, rvision's ADR 0028) — `EditorApp` runs
     /// its own bespoke loop instead of `Desktop` (ADR 0018), so it keeps this
     /// tiny table itself rather than gaining the framework's accelerator
     /// dispatch. Kept in sync with the `StatusItem`s built in [`Self::new`] by

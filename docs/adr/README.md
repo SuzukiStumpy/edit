@@ -28,5 +28,6 @@ below) and haven't been split out yet.
 | [0025](0025-settings-key-value-config-dir.md) | Settings: hand-rolled key-value file in the platform config dir |
 | [0026](0026-adopt-rvision-help-window-and-resource-loading.md) | Adopt `rvision`'s `HelpWindow` and `resource` module, retiring their `edit`-side equivalents *(help-viewer half superseded by ADR 0027)* |
 | [0027](0027-help-window-non-modal-resident-overlay.md) | The help window is a non-modal, resident, standalone overlay — not `exec_view`d |
+| [0028](0028-adopt-rvision-arrange.md) | Adopt `rvision::arrange` for chrome hit-testing, drag/resize sessions, and cascade/tile layout |
 
 New decision? Copy [`0000-template.md`](0000-template.md).
