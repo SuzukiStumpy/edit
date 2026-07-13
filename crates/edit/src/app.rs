@@ -13,6 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rvision::app::{Application, Program};
+use rvision::arrange::{self, ChromeFlags, ChromeHit};
 use rvision::backend::{Backend, EventSource};
 use rvision::buffer::Buffer;
 use rvision::canvas::Canvas;
@@ -200,41 +201,23 @@ struct HelpOverlay {
     drag: Option<HelpDrag>,
 }
 
-/// An in-progress mouse drag of the help window's frame — the same shape as
-/// [`Drag`], minus `ScrollThumb` (the help window handles its own internal
+/// An in-progress title-bar move or corner resize of the help window's frame,
+/// in desktop-local coordinates — the same shape as [`Drag`]'s `Session`
+/// case, minus `ScrollThumb` (the help window handles its own internal
 /// scroll-bar dragging, ADR 0027) and any zoom variant (help is never
-/// zoomable).
-#[derive(Debug, Clone, Copy)]
-enum HelpDrag {
-    Move { dx: i16, dy: i16 },
-    Resize { dx: i16, dy: i16 },
-}
+/// zoomable), so an [`arrange::ArrangeSession`] alone is the whole story
+/// (ADR 0028).
+type HelpDrag = arrange::ArrangeSession;
 
-/// An in-progress mouse drag of the active window's frame (Phase 9d). The offsets
-/// keep the grabbed point under the pointer for the duration of the drag.
+/// An in-progress mouse drag of the active window's frame (Phase 9d).
 #[derive(Debug, Clone, Copy)]
 enum Drag {
-    /// Moving the window: the pointer's offset from the window's top-left corner.
-    Move { dx: i16, dy: i16 },
-    /// Resizing from the bottom-right corner: the pointer's offset from that cell.
-    Resize { dx: i16, dy: i16 },
+    /// A title-bar move or corner resize, in desktop-local coordinates
+    /// (ADR 0028).
+    Session(arrange::ArrangeSession),
     /// Dragging a scroll-bar thumb: the bar's axis. The active window scrolls so
     /// its thumb follows the pointer (`ScrollBar::pos_at` inverts the placement).
     ScrollThumb { orientation: Orientation },
-}
-
-/// Where on a window's chrome a press landed (Phase 9d).
-enum ChromeHit {
-    /// The close glyph — request a close (through the discard guard).
-    Close,
-    /// The zoom glyph — toggle maximise.
-    Zoom,
-    /// The bottom-right corner — start a resize drag.
-    Resize,
-    /// The title bar — start a move drag.
-    Move,
-    /// Not on actionable chrome (interior, scroll bar, or plain border).
-    None,
 }
 
 /// The three chrome regions for a terminal of `size`.
@@ -277,35 +260,10 @@ fn hscroll_rect(size: Size) -> Rect {
 }
 
 /// The smallest window that still has a usable interior (a 1-cell border plus at
-/// least one interior cell).
+/// least one interior cell). `rvision::arrange`'s own functions take this as a
+/// caller-supplied `min_size` rather than a hardcoded floor, since `Desktop` and
+/// `edit` have always disagreed on it (ADR 0028).
 const MIN_WINDOW: Size = Size::new(3, 3);
-
-/// `rect` clamped to fit within a `bounds`-sized area at the origin: the size is
-/// capped and the origin pulled back so the rectangle stays fully on the desktop.
-fn clamp_rect(rect: Rect, bounds: Size) -> Rect {
-    let w = rect.width().clamp(0, bounds.width.max(0));
-    let h = rect.height().clamp(0, bounds.height.max(0));
-    let x = rect.origin().x.clamp(0, (bounds.width - w).max(0));
-    let y = rect.origin().y.clamp(0, (bounds.height - h).max(0));
-    Rect::from_origin_size(Point::new(x, y), Size::new(w, h))
-}
-
-/// A cascade slot (desktop-local) for the `i`-th window on a `desktop`-sized area:
-/// stepped down-right from the top-left and extending to the bottom-right corner,
-/// so window 0 fills the desktop and later windows peek out behind it. The step
-/// wraps so a long stack never marches off-screen.
-fn cascade_slot(desktop: Size, i: usize) -> Rect {
-    let step = (i % 8) as i16;
-    let x = (step * 2).min((desktop.width - MIN_WINDOW.width).max(0));
-    let y = step.min((desktop.height - MIN_WINDOW.height).max(0));
-    clamp_rect(
-        Rect::from_origin_size(
-            Point::new(x, y),
-            Size::new(desktop.width - x, desktop.height - y),
-        ),
-        desktop,
-    )
-}
 
 /// The command posted by the `index`-th recent-files menu entry.
 fn recent_command(index: usize) -> Command {
@@ -546,10 +504,11 @@ impl EditorApp {
         self.status_line.set_bounds(r.status);
         let ds = r.desktop.size();
         for doc in &mut self.documents {
-            doc.normal = clamp_rect(doc.normal, ds);
+            doc.normal = arrange::clamp_rect(doc.normal, ds);
         }
         if let Some(help) = &mut self.help {
-            help.window.set_bounds(clamp_rect(help.window.bounds(), ds));
+            help.window
+                .set_bounds(arrange::clamp_rect(help.window.bounds(), ds));
         }
         self.sync_layout();
     }
@@ -557,6 +516,14 @@ impl EditorApp {
     /// The desktop area (screen coordinates) the windows live in.
     fn desktop(&self) -> Rect {
         regions(self.size).desktop
+    }
+
+    /// Converts a screen-space point to desktop-local coordinates — the space
+    /// `Document::normal`/`HelpOverlay::window`'s bounds already use, and the
+    /// space a drag session's anchor/bounds are tracked in (ADR 0028).
+    fn to_desktop_local(&self, pos: Point) -> Point {
+        let origin = self.desktop().origin();
+        pos.offset(-origin.x, -origin.y)
     }
 
     /// Window `i`'s effective rectangle in **desktop-local** coordinates: its
@@ -567,7 +534,7 @@ impl EditorApp {
         if self.zoomed && i == self.active {
             Rect::from_origin_size(Point::new(0, 0), ds)
         } else {
-            clamp_rect(self.documents[i].normal, ds)
+            arrange::clamp_rect(self.documents[i].normal, ds)
         }
     }
 
@@ -663,29 +630,22 @@ impl EditorApp {
     /// `Rect` math with no `Document` access, so the help overlay (ADR 0027)
     /// reuses it directly against its own screen rect. `zoomable` gates
     /// whether the zoom-glyph span is tested at all — the help window has no
-    /// zoom glyph to hit.
+    /// zoom glyph to hit. `edit`'s windows are always moveable/resizable/
+    /// closable and never draw a context-help glyph (ADR 0021's `F1` glyph is
+    /// a `rvision::widgets::Window` feature this bespoke chrome doesn't use,
+    /// ADR 0028) — only `zoomable` varies between a `Document` and help.
     fn chrome_hit_at(r: Rect, pos: Point, zoomable: bool) -> ChromeHit {
-        let (w, h) = (r.width(), r.height());
-        let lx = pos.x - r.origin().x;
-        let ly = pos.y - r.origin().y;
-        if ly == 0 {
-            // `edit`'s own windows never draw a help glyph (ADR 0021's `F1`
-            // glyph is a `rvision::widgets::Window` feature this bespoke
-            // chrome doesn't use), so the spans never shift for one.
-            if Frame::close_span(w, false).is_some_and(|s| s.contains(&lx)) {
-                return ChromeHit::Close;
-            }
-            if zoomable && Frame::zoom_span(w, false).is_some_and(|s| s.contains(&lx)) {
-                return ChromeHit::Zoom;
-            }
-        }
-        if lx == w - 1 && ly == h - 1 {
-            return ChromeHit::Resize;
-        }
-        if ly == 0 && lx >= 1 && lx < w - 1 {
-            return ChromeHit::Move;
-        }
-        ChromeHit::None
+        arrange::chrome_hit(
+            r,
+            pos,
+            ChromeFlags {
+                moveable: true,
+                resizable: true,
+                closable: true,
+                zoomable,
+                has_help: false,
+            },
+        )
     }
 
     /// Restores a maximised active window to the full desktop as its `normal` rect
@@ -700,29 +660,30 @@ impl EditorApp {
         }
     }
 
-    /// Begins a title-bar move drag, remembering where on the window the pointer
-    /// grabbed so it tracks without jumping.
+    /// Begins a title-bar move drag, anchored at the desktop-local point the
+    /// pointer grabbed so it tracks without jumping.
     fn start_move(&mut self, pos: Point) {
         self.unzoom_for_drag();
-        let o = self.window_rect_screen(self.active).origin();
-        self.drag = Some(Drag::Move {
-            dx: pos.x - o.x,
-            dy: pos.y - o.y,
-        });
+        let bounds = self.window_rect_local(self.active);
+        let anchor = self.to_desktop_local(pos);
+        self.drag = Some(Drag::Session(arrange::start_session(
+            arrange::ArrangeKind::Move,
+            bounds,
+            anchor,
+        )));
     }
 
-    /// Begins a corner resize drag, remembering the pointer's offset from the
-    /// bottom-right cell.
+    /// Begins a corner resize drag, anchored at the desktop-local point the
+    /// pointer grabbed.
     fn start_resize(&mut self, pos: Point) {
         self.unzoom_for_drag();
-        let corner = self
-            .window_rect_screen(self.active)
-            .bottom_right()
-            .offset(-1, -1);
-        self.drag = Some(Drag::Resize {
-            dx: pos.x - corner.x,
-            dy: pos.y - corner.y,
-        });
+        let bounds = self.window_rect_local(self.active);
+        let anchor = self.to_desktop_local(pos);
+        self.drag = Some(Drag::Session(arrange::start_session(
+            arrange::ArrangeKind::Resize,
+            bounds,
+            anchor,
+        )));
     }
 
     /// Advances the in-progress drag to screen `pos`: moves the window's origin or
@@ -732,27 +693,19 @@ impl EditorApp {
         let Some(drag) = self.drag else {
             return;
         };
-        let ds = self.desktop().size();
-        let desk = self.desktop().origin();
-        let cur = self.documents[self.active].normal;
-        let next = match drag {
-            Drag::Move { dx, dy } => {
-                let origin = Point::new(pos.x - dx - desk.x, pos.y - dy - desk.y);
-                Rect::from_origin_size(origin, cur.size())
-            }
-            Drag::Resize { dx, dy } => {
-                let w = (pos.x - dx - desk.x - cur.origin().x + 1).max(MIN_WINDOW.width);
-                let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
-                Rect::from_origin_size(cur.origin(), Size::new(w, h))
+        match drag {
+            Drag::Session(session) => {
+                let ds = self.desktop().size();
+                let local_pos = self.to_desktop_local(pos);
+                let next = arrange::continue_session(&session, local_pos, MIN_WINDOW);
+                self.documents[self.active].normal = arrange::clamp_rect(next, ds);
+                self.sync_layout();
             }
             // A thumb drag scrolls the editor rather than moving the window.
             Drag::ScrollThumb { orientation } => {
                 self.scroll_to_thumb(self.active, orientation, pos);
-                return;
             }
-        };
-        self.documents[self.active].normal = clamp_rect(next, ds);
-        self.sync_layout();
+        }
     }
 
     /// Scrolls window `i`'s editor so the dragged scroll-bar thumb tracks screen
@@ -856,30 +809,27 @@ impl EditorApp {
 
     /// Begins a title-bar move drag of the help window.
     fn start_help_move(&mut self, pos: Point) {
-        let Some(o) = self.help_rect_screen().map(|r| r.origin()) else {
-            return;
-        };
+        let anchor = self.to_desktop_local(pos);
         if let Some(help) = &mut self.help {
-            help.drag = Some(HelpDrag::Move {
-                dx: pos.x - o.x,
-                dy: pos.y - o.y,
-            });
+            let bounds = help.window.bounds();
+            help.drag = Some(arrange::start_session(
+                arrange::ArrangeKind::Move,
+                bounds,
+                anchor,
+            ));
         }
     }
 
     /// Begins a corner resize drag of the help window.
     fn start_help_resize(&mut self, pos: Point) {
-        let Some(corner) = self
-            .help_rect_screen()
-            .map(|r| r.bottom_right().offset(-1, -1))
-        else {
-            return;
-        };
+        let anchor = self.to_desktop_local(pos);
         if let Some(help) = &mut self.help {
-            help.drag = Some(HelpDrag::Resize {
-                dx: pos.x - corner.x,
-                dy: pos.y - corner.y,
-            });
+            let bounds = help.window.bounds();
+            help.drag = Some(arrange::start_session(
+                arrange::ArrangeKind::Resize,
+                bounds,
+                anchor,
+            ));
         }
     }
 
@@ -887,22 +837,11 @@ impl EditorApp {
     /// the desktop (and a minimum size) — mirrors [`drag_to`](Self::drag_to).
     fn drag_help_to(&mut self, pos: Point) {
         let ds = self.desktop().size();
-        let desk = self.desktop().origin();
+        let local_pos = self.to_desktop_local(pos);
         let Some(help) = &mut self.help else { return };
-        let Some(drag) = help.drag else { return };
-        let cur = help.window.bounds();
-        let next = match drag {
-            HelpDrag::Move { dx, dy } => {
-                let origin = Point::new(pos.x - dx - desk.x, pos.y - dy - desk.y);
-                Rect::from_origin_size(origin, cur.size())
-            }
-            HelpDrag::Resize { dx, dy } => {
-                let w = (pos.x - dx - desk.x - cur.origin().x + 1).max(MIN_WINDOW.width);
-                let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
-                Rect::from_origin_size(cur.origin(), Size::new(w, h))
-            }
-        };
-        help.window.set_bounds(clamp_rect(next, ds));
+        let Some(session) = help.drag else { return };
+        let next = arrange::continue_session(&session, local_pos, MIN_WINDOW);
+        help.window.set_bounds(arrange::clamp_rect(next, ds));
     }
 
     /// Sets every editor's bounds to its window's interior (screen coordinates), so
@@ -916,7 +855,7 @@ impl EditorApp {
             let local = if self.zoomed && i == self.active {
                 Rect::from_origin_size(Point::new(0, 0), ds)
             } else {
-                clamp_rect(self.documents[i].normal, ds)
+                arrange::clamp_rect(self.documents[i].normal, ds)
             };
             let screen =
                 Rect::from_origin_size(local.origin().offset(origin.x, origin.y), local.size());
@@ -1080,7 +1019,7 @@ impl EditorApp {
         // Every new document inherits the persisted tab width (ADR 0025); this is
         // the single choke point for the initial document, File ▸ New, and Open.
         doc.editor.set_tab_width(self.settings.tab_width);
-        doc.normal = cascade_slot(self.desktop().size(), self.documents.len());
+        doc.normal = arrange::cascade_slot(self.desktop().size(), self.documents.len(), MIN_WINDOW);
         self.documents.push(doc);
         self.active = self.documents.len() - 1;
         self.sync_layout();
@@ -1147,7 +1086,7 @@ impl EditorApp {
         self.zoomed = false;
         let ds = self.desktop().size();
         for (i, doc) in self.documents.iter_mut().enumerate() {
-            doc.normal = cascade_slot(ds, i);
+            doc.normal = arrange::cascade_slot(ds, i, MIN_WINDOW);
         }
         self.sync_layout();
     }
@@ -1157,34 +1096,9 @@ impl EditorApp {
     pub fn tile(&mut self) {
         self.zoomed = false;
         let ds = self.desktop().size();
-        let n = self.documents.len();
-        // Roughly square grid; the last (possibly short) row stretches to fill.
-        let cols = (1..=n).find(|c| c * c >= n).unwrap_or(1);
-        let rows = n.div_ceil(cols);
-        for i in 0..n {
-            let row = i / cols;
-            let col = i % cols;
-            let cols_in_row = if row + 1 == rows {
-                n - cols * row
-            } else {
-                cols
-            };
-            let cell_w = ds.width / cols_in_row as i16;
-            let cell_h = ds.height / rows as i16;
-            let x = cell_w * col as i16;
-            let y = cell_h * row as i16;
-            // The last column/row absorbs the integer-division remainder.
-            let w = if col + 1 == cols_in_row {
-                ds.width - x
-            } else {
-                cell_w
-            };
-            let h = if row + 1 == rows {
-                ds.height - y
-            } else {
-                cell_h
-            };
-            self.documents[i].normal = Rect::from_origin_size(Point::new(x, y), Size::new(w, h));
+        let rects = arrange::tile(ds, self.documents.len());
+        for (doc, rect) in self.documents.iter_mut().zip(rects) {
+            doc.normal = rect;
         }
         self.sync_layout();
     }
@@ -1212,7 +1126,7 @@ impl EditorApp {
 
     /// Resolves a status-line hot-key to its command. `StatusLine` is now a pure
     /// display widget (its accelerators are meant to be bound into
-    /// `rvision::widgets::Desktop`'s global table, ADR 0028) — `EditorApp` runs
+    /// `rvision::widgets::Desktop`'s global table, rvision's ADR 0028) — `EditorApp` runs
     /// its own bespoke loop instead of `Desktop` (ADR 0018), so it keeps this
     /// tiny table itself rather than gaining the framework's accelerator
     /// dispatch. Kept in sync with the `StatusItem`s built in [`Self::new`] by
@@ -1339,6 +1253,10 @@ impl EditorApp {
                     ChromeHit::Zoom => self.toggle_zoom(),
                     ChromeHit::Move => self.start_move(mouse.pos),
                     ChromeHit::Resize => self.start_resize(mouse.pos),
+                    // Unreachable: a Document's ChromeFlags always sets
+                    // has_help: false (ADR 0028) — no context-help glyph is
+                    // ever drawn for `chrome_hit` to land on.
+                    ChromeHit::Help => {}
                     // A scroll bar scrolls (and the thumb starts a drag); otherwise
                     // an interior press places the caret and begins a selection.
                     ChromeHit::None => {
@@ -1424,6 +1342,7 @@ impl EditorApp {
         match Self::chrome_hit_at(help_rect, mouse.pos, false) {
             ChromeHit::Close => ctx.post(CM_CLOSE),
             ChromeHit::Zoom => {} // unreachable: help is built with `.zoomable(false)`
+            ChromeHit::Help => {} // unreachable: help's own ChromeFlags sets has_help: false
             ChromeHit::Move => self.start_help_move(mouse.pos),
             ChromeHit::Resize => self.start_help_resize(mouse.pos),
             ChromeHit::None => {

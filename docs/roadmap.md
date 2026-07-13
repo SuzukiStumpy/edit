@@ -498,12 +498,17 @@ ordered by how much shared machinery they need.
   owns its documents and chrome **concretely** (`Vec<Document>`, bespoke MDI, drag,
   resize, modal driver — ADR 0018) instead of using `rvision`'s `Desktop`/`Window`,
   because those wrap `Box<dyn View>` and acting on the concrete document behind one
-  would force a downcast or `Rc<RefCell>` (ADR 0003). Each step was locally
-  reasonable, but the result is **two windowing implementations**, and the
-  framework's has atrophied — no dynamic open/close, no drag in the widget, no F1
-  wiring in `Shell`. The help system was the first feature to want a mature
-  framework window (a non-modal `THelpWindow`) and tripped over the gap, which is
-  why its `rvision` `HelpWindow` container is deferred. The question — converge the
-  two (and how: IDs + a registry? a window-kind enum? generics over the interior?),
-  or accept the split deliberately — touches ADRs 0003, 0009, 0016, 0018 and the
-  `Shell` design, so it deserves a dedicated grilling before any code.
+  would force a downcast or `Rc<RefCell>` (rvision's ADR 0003). Each step was
+  locally reasonable, but the result is **two windowing implementations**.
+  `rvision`'s own ADR 0016 has since made `Desktop`/`Window` a genuinely capable
+  desktop metaphor (dynamic open/close, drag, resize, click-to-front, cascade/tile
+  — rvision's ADR 0033), and the help system now hosts `rvision`'s `HelpWindow` as
+  a non-modal resident overlay inside `edit`'s own MDI rather than `Desktop`'s
+  (ADR 0027) — the geometry duplication that produced was resolved by adopting
+  `rvision::arrange` for chrome hit-testing, drag/resize sessions, and cascade/tile
+  layout (ADR 0028), so the two implementations now share their arrangement math.
+  **What's still open**: the *ownership* question — converge the two (and how: IDs
+  + a registry? a window-kind enum? generics over the interior?), or accept the
+  split deliberately — is exactly as unresolved as before ADR 0028, which
+  deliberately left it untouched. Touches rvision's ADRs 0003, 0016 and `edit`'s
+  ADR 0009, 0018, 0028, so it still deserves a dedicated grilling before any code.
