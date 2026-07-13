@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.1](https://github.com/SuzukiStumpy/edit/compare/v1.1.0...v1.1.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* cache EditorView content_width instead of rescanning per frame ([e9349fc](https://github.com/SuzukiStumpy/edit/commit/e9349fca3555e3c64553941ed07d77ccfdc857da))
+* **edit:** cache EditorView content_width instead of rescanning per frame ([b49f18f](https://github.com/SuzukiStumpy/edit/commit/b49f18f5f4cb8de17b89a50195fee8b5ba425afb))
+* linter was failing checks ([957d6bb](https://github.com/SuzukiStumpy/edit/commit/957d6bb6c81de10b941012b9954be45242a56d24))
+
 ## [1.1.0](https://github.com/SuzukiStumpy/edit/compare/v1.0.2...v1.1.0) (2026-07-06)
 
 
