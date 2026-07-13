@@ -201,24 +201,20 @@ struct HelpOverlay {
     drag: Option<HelpDrag>,
 }
 
-/// An in-progress mouse drag of the help window's frame — the same shape as
-/// [`Drag`], minus `ScrollThumb` (the help window handles its own internal
+/// An in-progress title-bar move or corner resize of the help window's frame,
+/// in desktop-local coordinates — the same shape as [`Drag`]'s `Session`
+/// case, minus `ScrollThumb` (the help window handles its own internal
 /// scroll-bar dragging, ADR 0027) and any zoom variant (help is never
-/// zoomable).
-#[derive(Debug, Clone, Copy)]
-enum HelpDrag {
-    Move { dx: i16, dy: i16 },
-    Resize { dx: i16, dy: i16 },
-}
+/// zoomable), so an [`arrange::ArrangeSession`] alone is the whole story
+/// (ADR 0028).
+type HelpDrag = arrange::ArrangeSession;
 
-/// An in-progress mouse drag of the active window's frame (Phase 9d). The offsets
-/// keep the grabbed point under the pointer for the duration of the drag.
+/// An in-progress mouse drag of the active window's frame (Phase 9d).
 #[derive(Debug, Clone, Copy)]
 enum Drag {
-    /// Moving the window: the pointer's offset from the window's top-left corner.
-    Move { dx: i16, dy: i16 },
-    /// Resizing from the bottom-right corner: the pointer's offset from that cell.
-    Resize { dx: i16, dy: i16 },
+    /// A title-bar move or corner resize, in desktop-local coordinates
+    /// (ADR 0028).
+    Session(arrange::ArrangeSession),
     /// Dragging a scroll-bar thumb: the bar's axis. The active window scrolls so
     /// its thumb follows the pointer (`ScrollBar::pos_at` inverts the placement).
     ScrollThumb { orientation: Orientation },
@@ -522,6 +518,14 @@ impl EditorApp {
         regions(self.size).desktop
     }
 
+    /// Converts a screen-space point to desktop-local coordinates — the space
+    /// `Document::normal`/`HelpOverlay::window`'s bounds already use, and the
+    /// space a drag session's anchor/bounds are tracked in (ADR 0028).
+    fn to_desktop_local(&self, pos: Point) -> Point {
+        let origin = self.desktop().origin();
+        pos.offset(-origin.x, -origin.y)
+    }
+
     /// Window `i`'s effective rectangle in **desktop-local** coordinates: its
     /// `normal` rect, unless it is the zoomed active window, which fills the
     /// desktop. Always clamped to the desktop.
@@ -656,29 +660,30 @@ impl EditorApp {
         }
     }
 
-    /// Begins a title-bar move drag, remembering where on the window the pointer
-    /// grabbed so it tracks without jumping.
+    /// Begins a title-bar move drag, anchored at the desktop-local point the
+    /// pointer grabbed so it tracks without jumping.
     fn start_move(&mut self, pos: Point) {
         self.unzoom_for_drag();
-        let o = self.window_rect_screen(self.active).origin();
-        self.drag = Some(Drag::Move {
-            dx: pos.x - o.x,
-            dy: pos.y - o.y,
-        });
+        let bounds = self.window_rect_local(self.active);
+        let anchor = self.to_desktop_local(pos);
+        self.drag = Some(Drag::Session(arrange::start_session(
+            arrange::ArrangeKind::Move,
+            bounds,
+            anchor,
+        )));
     }
 
-    /// Begins a corner resize drag, remembering the pointer's offset from the
-    /// bottom-right cell.
+    /// Begins a corner resize drag, anchored at the desktop-local point the
+    /// pointer grabbed.
     fn start_resize(&mut self, pos: Point) {
         self.unzoom_for_drag();
-        let corner = self
-            .window_rect_screen(self.active)
-            .bottom_right()
-            .offset(-1, -1);
-        self.drag = Some(Drag::Resize {
-            dx: pos.x - corner.x,
-            dy: pos.y - corner.y,
-        });
+        let bounds = self.window_rect_local(self.active);
+        let anchor = self.to_desktop_local(pos);
+        self.drag = Some(Drag::Session(arrange::start_session(
+            arrange::ArrangeKind::Resize,
+            bounds,
+            anchor,
+        )));
     }
 
     /// Advances the in-progress drag to screen `pos`: moves the window's origin or
@@ -688,27 +693,19 @@ impl EditorApp {
         let Some(drag) = self.drag else {
             return;
         };
-        let ds = self.desktop().size();
-        let desk = self.desktop().origin();
-        let cur = self.documents[self.active].normal;
-        let next = match drag {
-            Drag::Move { dx, dy } => {
-                let origin = Point::new(pos.x - dx - desk.x, pos.y - dy - desk.y);
-                Rect::from_origin_size(origin, cur.size())
-            }
-            Drag::Resize { dx, dy } => {
-                let w = (pos.x - dx - desk.x - cur.origin().x + 1).max(MIN_WINDOW.width);
-                let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
-                Rect::from_origin_size(cur.origin(), Size::new(w, h))
+        match drag {
+            Drag::Session(session) => {
+                let ds = self.desktop().size();
+                let local_pos = self.to_desktop_local(pos);
+                let next = arrange::continue_session(&session, local_pos, MIN_WINDOW);
+                self.documents[self.active].normal = arrange::clamp_rect(next, ds);
+                self.sync_layout();
             }
             // A thumb drag scrolls the editor rather than moving the window.
             Drag::ScrollThumb { orientation } => {
                 self.scroll_to_thumb(self.active, orientation, pos);
-                return;
             }
-        };
-        self.documents[self.active].normal = arrange::clamp_rect(next, ds);
-        self.sync_layout();
+        }
     }
 
     /// Scrolls window `i`'s editor so the dragged scroll-bar thumb tracks screen
@@ -812,30 +809,27 @@ impl EditorApp {
 
     /// Begins a title-bar move drag of the help window.
     fn start_help_move(&mut self, pos: Point) {
-        let Some(o) = self.help_rect_screen().map(|r| r.origin()) else {
-            return;
-        };
+        let anchor = self.to_desktop_local(pos);
         if let Some(help) = &mut self.help {
-            help.drag = Some(HelpDrag::Move {
-                dx: pos.x - o.x,
-                dy: pos.y - o.y,
-            });
+            let bounds = help.window.bounds();
+            help.drag = Some(arrange::start_session(
+                arrange::ArrangeKind::Move,
+                bounds,
+                anchor,
+            ));
         }
     }
 
     /// Begins a corner resize drag of the help window.
     fn start_help_resize(&mut self, pos: Point) {
-        let Some(corner) = self
-            .help_rect_screen()
-            .map(|r| r.bottom_right().offset(-1, -1))
-        else {
-            return;
-        };
+        let anchor = self.to_desktop_local(pos);
         if let Some(help) = &mut self.help {
-            help.drag = Some(HelpDrag::Resize {
-                dx: pos.x - corner.x,
-                dy: pos.y - corner.y,
-            });
+            let bounds = help.window.bounds();
+            help.drag = Some(arrange::start_session(
+                arrange::ArrangeKind::Resize,
+                bounds,
+                anchor,
+            ));
         }
     }
 
@@ -843,21 +837,10 @@ impl EditorApp {
     /// the desktop (and a minimum size) — mirrors [`drag_to`](Self::drag_to).
     fn drag_help_to(&mut self, pos: Point) {
         let ds = self.desktop().size();
-        let desk = self.desktop().origin();
+        let local_pos = self.to_desktop_local(pos);
         let Some(help) = &mut self.help else { return };
-        let Some(drag) = help.drag else { return };
-        let cur = help.window.bounds();
-        let next = match drag {
-            HelpDrag::Move { dx, dy } => {
-                let origin = Point::new(pos.x - dx - desk.x, pos.y - dy - desk.y);
-                Rect::from_origin_size(origin, cur.size())
-            }
-            HelpDrag::Resize { dx, dy } => {
-                let w = (pos.x - dx - desk.x - cur.origin().x + 1).max(MIN_WINDOW.width);
-                let h = (pos.y - dy - desk.y - cur.origin().y + 1).max(MIN_WINDOW.height);
-                Rect::from_origin_size(cur.origin(), Size::new(w, h))
-            }
-        };
+        let Some(session) = help.drag else { return };
+        let next = arrange::continue_session(&session, local_pos, MIN_WINDOW);
         help.window.set_bounds(arrange::clamp_rect(next, ds));
     }
 
